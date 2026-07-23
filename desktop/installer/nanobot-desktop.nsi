@@ -1,0 +1,182 @@
+; ======================================================================
+; nanobot Desktop - Windows Installer (NSIS)
+; ======================================================================
+;
+; Build with:
+;   makensis /DOUTPUT_DIR=desktop\output desktop\installer\nanobot-desktop.nsi
+;
+; ======================================================================
+
+Unicode true
+!include "MUI2.nsh"
+!include "FileFunc.nsh"
+!include "LogicLib.nsh"
+
+; ----------------------------------------------------------------------
+; Paths - override on command line with -DASSETS_DIR=..., etc.
+; ----------------------------------------------------------------------
+!ifndef ASSETS_DIR
+  !define ASSETS_DIR "desktop\assets"
+!endif
+!ifndef BACKEND_DIR
+  !define BACKEND_DIR "desktop\backend"
+!endif
+!ifndef LICENSE_PATH
+  !define LICENSE_PATH "LICENSE"
+!endif
+!ifndef SCRIPTS_DIR
+  !define SCRIPTS_DIR "desktop\installer\scripts"
+!endif
+
+; ----------------------------------------------------------------------
+; Branding
+; ----------------------------------------------------------------------
+!define PRODUCT_NAME "nanobot Desktop"
+!define PRODUCT_PUBLISHER "nanobot"
+!define PRODUCT_VERSION "0.2.2"
+!define PRODUCT_WEB_SITE "https://github.com/HKUDS/nanobot"
+!define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\nanobot-desktop.exe"
+
+Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
+OutFile "${OUTPUT_DIR}\nanobot-desktop-setup.exe"
+InstallDir "$PROGRAMFILES64\nanobot Desktop"
+RequestExecutionLevel admin
+SetCompressor /SOLID lzma
+
+; ----------------------------------------------------------------------
+; MUI Settings
+; ----------------------------------------------------------------------
+!define MUI_ABORTWARNING
+!define MUI_ICON "${ASSETS_DIR}\nanobot.ico"
+!define MUI_UNICON "${ASSETS_DIR}\nanobot.ico"
+
+; ----------------------------------------------------------------------
+; Pages
+; ----------------------------------------------------------------------
+!insertmacro MUI_PAGE_WELCOME
+!insertmacro MUI_PAGE_LICENSE "${LICENSE_PATH}"
+!insertmacro MUI_PAGE_DIRECTORY
+!insertmacro MUI_PAGE_INSTFILES
+!insertmacro MUI_PAGE_FINISH
+
+!insertmacro MUI_UNPAGE_CONFIRM
+!insertmacro MUI_UNPAGE_INSTFILES
+
+!insertmacro MUI_LANGUAGE "English"
+!insertmacro MUI_LANGUAGE "SimpChinese"
+
+; ----------------------------------------------------------------------
+; Install Section
+; ----------------------------------------------------------------------
+Section "nanobot Desktop" SecMain
+    SetOutPath "$INSTDIR"
+
+    ; --- Assets (icons) ---
+    SetOutPath "$INSTDIR\assets"
+    File "${ASSETS_DIR}\nanobot.ico"
+    File "${ASSETS_DIR}\nanobot_icon.png"
+    File "${ASSETS_DIR}\nanobot_logo.png"
+    SetOutPath "$INSTDIR"
+
+    ; --- Python runtime bundle ---
+    DetailPrint "Installing Python runtime + nanobot..."
+    SetOutPath "$INSTDIR\python"
+    File /r /x "__pycache__" /x "*.pyc" /x "*.pyo" "${OUTPUT_DIR}\python-bundle\*"
+    SetOutPath "$INSTDIR"
+
+    ; --- Backend launcher + web onboarding server ---
+    DetailPrint "Installing backend..."
+    SetOutPath "$INSTDIR\backend"
+    File "${BACKEND_DIR}\__init__.py"
+    File "${BACKEND_DIR}\launcher.py"
+    File "${BACKEND_DIR}\onboard_server.py"
+    SetOutPath "$INSTDIR"
+
+    ; --- Pake/Tauri desktop app (native WebView wrapper) ---
+    DetailPrint "Installing Pake desktop app..."
+    File "${OUTPUT_DIR}\nanobot.exe"
+    SetOutPath "$INSTDIR"
+
+    ; --- Create shortcuts ---
+    ; IMPORTANT: target is pythonw.exe (windowless) so NO console ever appears.
+    ; The launcher starts the gateway silently, serves the web onboarding, and
+    ; opens the single Pake window. First run shows the web setup form.
+    CreateDirectory "$SMPROGRAMS\nanobot Desktop"
+
+    CreateShortCut "$DESKTOP\nanobot Desktop.lnk" \
+        "$INSTDIR\python\pythonw.exe" \
+        '"$INSTDIR\backend\launcher.py"' \
+        "$INSTDIR\assets\nanobot.ico" \
+        0 SW_SHOWNORMAL
+
+    CreateShortCut "$SMPROGRAMS\nanobot Desktop\nanobot Desktop.lnk" \
+        "$INSTDIR\python\pythonw.exe" \
+        '"$INSTDIR\backend\launcher.py"' \
+        "$INSTDIR\assets\nanobot.ico" \
+        0 SW_SHOWNORMAL
+
+    CreateShortCut "$SMPROGRAMS\nanobot Desktop\Uninstall nanobot Desktop.lnk" \
+        "$INSTDIR\uninst.exe"
+
+    ; --- Register uninstaller ---
+    WriteUninstaller "$INSTDIR\uninst.exe"
+
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "DisplayName" "${PRODUCT_NAME}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "DisplayVersion" "${PRODUCT_VERSION}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "Publisher" "${PRODUCT_PUBLISHER}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "UninstallString" "$INSTDIR\uninst.exe"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "DisplayIcon" "$INSTDIR\assets\nanobot.ico"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "URLInfoAbout" "${PRODUCT_WEB_SITE}"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "NoModify" "1"
+    WriteRegStr HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "NoRepair" "1"
+
+    ${GetSize} "$INSTDIR" "/S=0K" $0 $1 $2
+    IntFmt $0 "0x%08X" $0
+    WriteRegDWORD HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "EstimatedSize" "$0"
+
+    WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\nanobot.exe"
+    WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "Path" "$INSTDIR"
+SectionEnd
+
+; ----------------------------------------------------------------------
+; Uninstaller
+; ----------------------------------------------------------------------
+Section "Uninstall"
+    DetailPrint "Stopping running nanobot instances..."
+    nsExec::ExecToLog 'taskkill /FI "IMAGENAME eq pythonw.exe" /T 2>nul'
+    nsExec::ExecToLog 'taskkill /FI "IMAGENAME eq nanobot.exe" /T 2>nul'
+
+    RMDir /r "$INSTDIR\python"
+    RMDir /r "$INSTDIR\backend"
+    RMDir /r "$INSTDIR\assets"
+    Delete "$INSTDIR\nanobot.exe"
+    Delete "$INSTDIR\uninst.exe"
+    RMDir "$INSTDIR"
+
+    Delete "$DESKTOP\nanobot Desktop.lnk"
+    RMDir /r "$SMPROGRAMS\nanobot Desktop"
+
+    DeleteRegKey HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop"
+    DeleteRegKey HKLM "${PRODUCT_DIR_REGKEY}"
+SectionEnd
+
+Function .onInit
+    ReadRegStr $0 HKLM "Software\Microsoft\Windows\CurrentVersion\Uninstall\nanobot-desktop" \
+        "UninstallString"
+    ${If} $0 != ""
+        MessageBox MB_OKCANCEL|MB_ICONQUESTION \
+            "${PRODUCT_NAME} is already installed. Click OK to upgrade (user data preserved) or Cancel." \
+            IDOK upgrade
+        Abort
+        upgrade:
+    ${EndIf}
+FunctionEnd

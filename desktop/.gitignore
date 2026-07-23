@@ -1,0 +1,15 @@
+# 构建产物（体积大，不应入库）
+output/
+# 嵌入式 Python 运行时（构建时下载/生成）
+python-bundle/
+# Pake 构建中间产物
+nanobot.exe
+nanobot.msi
+*.msi
+# 下载的安装包/压缩包
+*.zip
+rustup-init.exe
+# Python 缓存
+__pycache__/
+*.pyc
+*.pyo
