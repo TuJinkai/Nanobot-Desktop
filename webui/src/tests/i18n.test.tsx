@@ -131,12 +131,12 @@ function interpolationKeys(value: unknown): string[] {
 }
 
 describe("webui i18n", () => {
-  it("defaults to English until the user chooses another language", () => {
+  it("defaults to Simplified Chinese until the user chooses another language", () => {
     localStorage.removeItem(LOCALE_STORAGE_KEY);
-    expect(resolveInitialLocale()).toBe("en");
-
-    localStorage.setItem(LOCALE_STORAGE_KEY, "zh-CN");
     expect(resolveInitialLocale()).toBe("zh-CN");
+
+    localStorage.setItem(LOCALE_STORAGE_KEY, "en");
+    expect(resolveInitialLocale()).toBe("en");
   });
 
   it("switches UI copy and document locale through the language switcher", async () => {

@@ -71,13 +71,16 @@ def _python_dir() -> Path:
 
 
 def _pythonw_exe() -> str:
-    """Windowless interpreter for spawning children (no console)."""
-    p = _python_dir() / "pythonw.exe"
-    if p.exists():
-        return str(p)
-    p = _python_dir() / "python.exe"
-    if p.exists():
-        return str(p)
+    """Interpreter for spawning children.
+
+    Windows: prefer pythonw.exe (no console). macOS/Linux: python3 (GUI apps
+    launched from a .app bundle don't attach a terminal anyway).
+    """
+    d = _python_dir()
+    for name in ("pythonw.exe", "python.exe", "python3", "python"):
+        p = d / name
+        if p.exists():
+            return str(p)
     return sys.executable
 
 

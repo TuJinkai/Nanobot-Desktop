@@ -163,6 +163,33 @@ desktop/
 - 注册到"添加/删除程序"、创建桌面 + 开始菜单快捷方式、卸载程序。
 - 卸载时保留 `~/.nanobot` 用户数据（配置、对话历史）。
 
+## 安全模型
+
+WebUI 里的「默认权限 / 完全访问权限」只是其中一层。nanobot 的工具安全是**分层**的：
+
+| 层级 | 机制 | 强度 | 平台 |
+|------|------|------|------|
+| **L0** | 完全访问（`restrict_to_workspace=False`） | 无限制 | 全平台 |
+| **L1** | 默认权限（`restrict_to_workspace=True`） | 应用层路径 guard | 全平台 |
+| **L2** | 危险命令内置黑名单 | 始终生效 | 全平台 |
+| **L3** | 自定义 allow/deny 命令模式 | 可配 | 全平台 |
+| **L4** | 环境变量过滤 + 超时 | 可配 | 全平台 |
+| **L5** | **OS 级沙箱**（最强） | 系统强制 | ⚠️ 仅 Linux/macOS |
+
+- **L5 OS 级沙箱**：`nanobot/agent/tools/sandbox.py` 唯一后端是 `bwrap`（Bubblewrap，**Linux**）；`workspace_access.py` 另识别 `macOS App Sandbox`，靠环境变量 `NANOBOT_WORKSPACE_SANDBOX_PROVIDER` + `NANOBOT_WORKSPACE_SANDBOX_ENFORCED` 检测（由部署/容器设，nanobot 自己不启沙箱）。**Windows 无 OS 级沙箱后端**。
+- **L2 黑名单**（`shell.py`）：默认拦 `rm -rf` / `del /f` / `rmdir /s` / `format` / `mkfs`·`diskpart` / `dd` / 磁盘写入 / `shutdown`·`reboot` / fork bomb / 写 `history.jsonl`·`.dream_cursor` 等，不受权限模式影响。
+- **L3/L4 配置示例**（`tools.exec`）：
+  ```jsonc
+  "tools": { "exec": {
+    "deny_patterns": ["\\bcurl\\b", "\\bwget\\b"],
+    "allow_patterns": ["^ls ", "^cat "],   // 白名单优先于黑名单
+    "allowed_env_keys": ["PATH"],          // 只透传指定环境变量
+    "timeout": 60                           // 硬超时（秒）
+  }}
+  ```
+
+> **Windows 桌面端结论**：没有比「默认权限」更安全的内置隔离。要叠加加固用 L3/L4；要真正的内核级隔离，须在 nanobot 之外跑（Windows Sandbox / Hyper-V / WSL2，WSL2 内还能用 bwrap）。
+
 ## ⚠️ 核心注意事项 / 避坑指南
 
 这一节是本项目的"血泪经验"，改动时务必遵守：
@@ -249,6 +276,35 @@ makensis \
 | `nanobot-desktop-setup.exe` | Windows 安装包（~59MB） |
 | `nanobot.exe` | Pake/Tauri 原生窗口（~8.6MB，含中文注入） |
 | `python-bundle/` | 嵌入式 Python 3.12 + nanobot + 全部依赖（~250MB） |
+
+## 跨平台：macOS 打包（Intel + ARM）
+
+**⚠️ 无法在 Windows 上交叉构建 macOS 安装包**——Tauri/Pake 的 `.dmg`/`.app` 需要 macOS SDK + Xcode，只能在 **macOS 主机** 或 **GitHub Actions 的 macOS runner** 上构建。
+
+本仓库提供 `.github/workflows/build-desktop.yml`，在 CI 上一次产出三目标：
+
+| 目标 | Runner | 产物 |
+|------|--------|------|
+| Windows x64 | `windows-latest` | `nanobot-desktop-setup.exe`（NSIS） |
+| macOS Intel | `macos-13` | `nanobot.dmg`（Pake） |
+| macOS ARM (M1/M2) | `macos-14` | `nanobot.dmg`（Pake） |
+
+触发方式：
+- **手动**：GitHub → Actions → `build-desktop` → Run workflow。
+- **自动**：推送 `v*` tag 且改动了 `desktop/` / `webui/` / `nanobot/` 时。
+
+在 Mac 上本地构建（需 Xcode + Rust + Node）：
+```bash
+# 1. 临时启动前端路由（pake 构建要抓页面）
+python desktop/backend/onboard_server.py &
+# 2. 双架构（Intel + ARM 合并到一个 .dmg）
+pake http://127.0.0.1:8766 --name nanobot \
+  --icon desktop/assets/nanobot_icon.png \
+  --width 1100 --height 720 --multi-arch \
+  --inject desktop/assets/inject-locale.js
+```
+
+> macOS 的后端 bundle 用 [python-build-standalone](https://github.com/indygreg/python-build-standalone)（可重分发的独立 Python，按 `aarch64-apple-darwin` / `x86_64-apple-darwin` 分架构下载），`launcher.py` 已兼容（macOS 下找 `python3` 而非 `pythonw.exe`）。
 
 ## 安装后体验
 

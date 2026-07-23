@@ -100,6 +100,8 @@ def build_and_save_config(*, provider, api_key, model, api_base=None) -> None:
             provider_cfg.api_base = base
     config.agents.defaults.model = model.strip()
     config.agents.defaults.provider = provider
+    # 桌面端面向中文用户，默认东八区（用户可在 WebUI 设置里改）。
+    config.agents.defaults.timezone = "Asia/Shanghai"
     # Enable the local WebUI. token_issue_secret left empty => passwordless for localhost.
     config.channels.websocket = {
         "enabled": True,

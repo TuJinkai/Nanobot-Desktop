@@ -14,7 +14,8 @@ export const supportedLocales = [
 
 export type SupportedLocale = (typeof supportedLocales)[number]["code"];
 
-export const defaultLocale: SupportedLocale = "en";
+// 默认简体中文（桌面端面向中文用户；用户手动切换语言后会持久化，不会回弹）。
+export const defaultLocale: SupportedLocale = "zh-CN";
 export const fallbackLocale: SupportedLocale = "en";
 
 export function normalizeLocale(
