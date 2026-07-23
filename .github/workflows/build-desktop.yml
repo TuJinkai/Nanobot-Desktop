@@ -1,20 +1,11 @@
 name: build-desktop
 
-# 构建 nanobot Desktop 安装包：Windows x64 + macOS (Intel + ARM)。
-#
-# 为什么用 CI：Tauri/Pake 的 macOS 包（.dmg/.app）需要 macOS SDK + Xcode，
-# 无法在 Windows 上交叉构建。本工作流在对应平台的 runner 上原生构建。
-#
-# 触发：手动（Actions → Run workflow），或在推送 v* tag 时自动运行。
+# 构建 nanobot Desktop：Windows x64 + macOS (Intel + ARM)。
+# macOS 包无法在 Windows 交叉构建（需 macOS SDK+Xcode），故用对应平台 runner。
 on:
   workflow_dispatch:
   push:
     tags: ["v*"]
-    paths:
-      - "desktop/**"
-      - "webui/**"
-      - "nanobot/**"
-      - ".github/workflows/build-desktop.yml"
 
 jobs:
   build:
@@ -27,24 +18,22 @@ jobs:
             label: windows-x64
           - os: macos-13            # Intel
             label: macos-intel
-          - os: macos-14            # Apple Silicon (ARM)
+          - os: macos-14            # Apple Silicon
             label: macos-arm
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v4
 
-      - name: 设置 Node + Bun
-        uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: latest
+      - uses: actions/setup-node@v4
+        with: { node-version: "20" }
 
-      - name: 设置 Rust
-        uses: dtolnay/rust-toolchain@stable
+      - uses: oven-sh/setup-bun@v2
+        with: { bun-version: latest }
 
-      - name: 设置 Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: actions/setup-python@v5
+        with: { python-version: "3.12" }
 
       # --- 1. WebUI --------------------------------------------------------
       - name: 构建 WebUI
@@ -53,7 +42,7 @@ jobs:
           bun install
           bun run build
 
-      # --- 2. nanobot wheel ------------------------------------------------
+      # --- 2. nanobot wheel（构建一次，bundle 和路由都用它）---------------
       - name: 构建 nanobot wheel
         run: |
           python -m pip install --upgrade pip build
@@ -61,92 +50,98 @@ jobs:
           mkdir -p desktop/output/wheels
           cp dist/nanobot_ai-*.whl desktop/output/wheels/
 
-      # --- 3. 嵌入式 Python 后端 ------------------------------------------
-      # Windows: Python embeddable（自包含、可分发）。
-      # macOS: python-build-standalone（Gregory Szorc 的可重分发独立构建）。
-      - name: 制作 Python 后端 bundle (Windows)
-        if: runner.os == 'Windows'
-        working-directory: desktop/output
-        run: |
-          curl -L -o python-embed.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
-          rm -rf python-bundle && mkdir python-bundle
-          cd python-bundle && unzip -q ../python-embed.zip
-          printf 'python312.zip\n.\nLib\\site-packages\n\nimport site\n' > python312._pth
-          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
-          ./python.exe get-pip.py --no-warn-script-location
-          rm get-pip.py
-          $env:PYTHONNOUSERSITE = "1"
-          ./python.exe -m pip install --no-warn-script-location ../wheels/nanobot_ai-*.whl
-          ./python.exe -c "import nanobot; print('ok', nanobot.__version__)"
+      # 把 wheel 装进 runner 的 python，让 onboard_server.py 能 import nanobot
+      # （解耦：pake 构建抓页用的路由不依赖最终 bundle）
+      - name: 安装 nanobot 到 runner python
+        run: python -m pip install desktop/output/wheels/nanobot_ai-*.whl
 
-      - name: 制作 Python 后端 bundle (macOS)
-        if: runner.os == 'macOS'
-        working-directory: desktop/output
+      # --- 3. 临时启动前端路由（pake 构建时抓取页面）----------------------
+      - name: 启动前端路由
         run: |
-          # python-build-standalone 按 runner 架构选包
-          ARCH="$(uname -m)"  # arm64 或 x86_64
-          if [ "$ARCH" = "arm64" ]; then PYARCH="aarch64-apple-darwin"; else PYARCH="x86_64-apple-darwin"; fi
-          # 选一个已发布的 cpython 版本（可在 python-build-standalone releases 查最新）
-          PS_VERSION="20251015"
-          URL="https://github.com/indygreg/python-build-standalone/releases/download/${PS_VERSION}/cpython-3.12.${PS_VERSION#2025}-${PYARCH}-pgo+lto-full.tar.gz"
-          curl -L -o py.tar.gz "https://github.com/indygreg/python-build-standalone/releases/download/${PS_VERSION}/cpython-3.12.8+${PS_VERSION}-${PYARCH}-pgo+lto-full.tar.gz"
-          tar -xzf py.tar.gz
-          mv python-install python-bundle
-          export PYTHONNOUSERSITE=1
-          ./python-bundle/bin/python3 -m pip install --no-warn-script-location wheels/nanobot_ai-*.whl
-          ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)"
-
-      # --- 4. 临时启动前端路由（pake 构建时抓取页面）----------------------
-      - name: 启动前端路由（供 pake 构建抓取页面）
-        working-directory: desktop/output
-        run: |
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            python-bundle/python.exe ../backend/onboard_server.py &
-          else
-            python-bundle/bin/python3 ../backend/onboard_server.py &
-          fi
+          python desktop/backend/onboard_server.py >/tmp/router.log 2>&1 &
+          sleep 3
+          curl -s http://127.0.0.1:8766/api/status || true
         shell: bash
-      - name: 等待路由就绪
-        run: sleep 3
 
-      # --- 5. Pake 桌面窗口 ------------------------------------------------
+      # --- 4. Pake 桌面窗口 ------------------------------------------------
       - name: 安装 pake-cli
         run: npm install -g pake-cli
 
-      - name: 构建 Pake（含中文 locale 注入）
+      - name: 构建 Pake（含中文注入）
         working-directory: desktop/output
         run: |
           pake http://127.0.0.1:8766 \
             --name nanobot \
-            --icon $GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png \
+            --icon "$GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png" \
             --width 1100 --height 720 \
-            --inject $GITHUB_WORKSPACE/desktop/assets/inject-locale.js
+            --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js"
         shell: bash
 
-      # --- 6. Windows 额外打 NSIS 安装包 ----------------------------------
+      # --- 5. Python 后端 bundle（Windows embeddable；macOS best-effort）--
+      - name: Python bundle (Windows, embeddable)
+        if: runner.os == 'Windows'
+        working-directory: desktop/output
+        shell: pwsh
+        run: |
+          curl -L -o python-embed.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+          if (Test-Path python-bundle) { Remove-Item -Recurse -Force python-bundle }
+          New-Item -ItemType Directory python-bundle | Out-Null
+          Push-Location python-bundle
+          unzip -q ../python-embed.zip
+          Set-Content python312._pth "python312.zip`n.`nLib\site-packages`n`nimport site`n"
+          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
+          ./python.exe get-pip.py --no-warn-script-location
+          Remove-Item get-pip.py
+          $env:PYTHONNOUSERSITE = "1"
+          ./python.exe -m pip install --no-warn-script-location ../wheels/nanobot_ai-*.whl
+          ./python.exe -c "import nanobot; print('ok', nanobot.__version__)"
+          Pop-Location
+
+      - name: Python bundle (macOS, best-effort)
+        if: runner.os == 'macOS'
+        working-directory: desktop/output
+        shell: bash
+        run: |
+          set -x
+          ARCH="$(uname -m)"
+          if [ "$ARCH" = "arm64" ]; then TRIPLE="aarch64-apple-darwin"; else TRIPLE="x86_64-apple-darwin"; fi
+          # 动态取 python-build-standalone 最新 release 里匹配 3.12 的资产
+          ASSET=$(curl -fsSL https://api.github.com/repos/indygreg/python-build-standalone/releases/latest \
+            | python -c "import sys,json; r=json.load(sys.stdin); t='$TRIPLE'; print(next((a['browser_download_url'] for a in r['assets'] if 'cpython-3.12' in a['name'] and t in a['name'] and 'pgo+lto-full' in a['name'] and a['name'].endswith('.tar.gz')),''))" || true)
+          if [ -z "$ASSET" ]; then echo "未找到 standalone python，跳过 mac bundle（不影响 .dmg）"; exit 0; fi
+          curl -L -o py.tar.gz "$ASSET"
+          tar -xzf py.tar.gz
+          mv python-install python-bundle
+          export PYTHONNOUSERSITE=1
+          ./python-bundle/bin/python3 -m pip install --no-warn-script-location wheels/nanobot_ai-*.whl
+          ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)" || true
+
+      # --- 6. Windows NSIS 安装包 ------------------------------------------
       - name: 编译 NSIS 安装包 (Windows)
         if: runner.os == 'Windows'
+        shell: pwsh
         run: |
-          makensis `
+          $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
+          if (-not (Test-Path $nsis)) { choco install nsis -y; $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
+          & $nsis `
             /DOUTPUT_DIR=desktop/output `
             /DASSETS_DIR=desktop/assets `
             /DBACKEND_DIR=desktop/backend `
             /DLICENSE_PATH=LICENSE `
             desktop/installer/nanobot-desktop.nsi
-        shell: pwsh
 
-      # --- 7. 汇总产物 -----------------------------------------------------
-      - name: 上传 Windows 安装包
+      # --- 7. 上传产物 -----------------------------------------------------
+      - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
-        uses: actions/upload-artifact@v4
         with:
           name: nanobot-desktop-windows-x64
           path: desktop/output/nanobot-desktop-setup.exe
 
-      - name: 上传 macOS 安装包 (.dmg)
+      - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
-        uses: actions/upload-artifact@v4
         with:
           name: nanobot-desktop-${{ matrix.label }}
-          path: desktop/output/*.dmg
+          path: |
+            desktop/output/*.dmg
+            desktop/output/*.app
           if-no-files-found: warn
