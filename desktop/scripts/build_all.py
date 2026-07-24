@@ -23,6 +23,15 @@ import sys
 import urllib.request
 from pathlib import Path
 
+# Force UTF-8 on stdout/stderr so the Chinese step labels and ✓/✗ markers
+# survive a GBK Windows console (otherwise print() raises UnicodeEncodeError
+# and masks the real build error).
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8")
+    except Exception:  # noqa: BLE001
+        pass
+
 ROOT = Path(__file__).resolve().parent.parent.parent
 DESKTOP = ROOT / "desktop"
 WEBUI = ROOT / "webui"
@@ -37,6 +46,17 @@ def step(name: str) -> None:
 
 
 def run(cmd: list[str], cwd: Path | None = None) -> int:
+    # Resolve the executable via PATH so npm/.cmd shims (e.g. `bun` → bun.cmd on
+    # Windows) are found — CreateProcess won't search PATHEXT or launch a .cmd
+    # directly.  Script shims are wrapped in `cmd /c`; real .exe get their full
+    # path.  Everything else is left untouched (so `python -c "…; …"` keeps its
+    # semicolon instead of being split by a shell).
+    exe = shutil.which(cmd[0])
+    if exe:
+        if exe.lower().endswith((".cmd", ".bat")):
+            cmd = ["cmd", "/c", exe, *cmd[1:]]
+        else:
+            cmd = [exe, *cmd[1:]]
     print(f"  $ {' '.join(cmd)}")
     return subprocess.run(cmd, cwd=str(cwd or ROOT)).returncode
 
@@ -117,7 +137,7 @@ def build_python_bundle() -> bool:
     get_pip = bundle / "get-pip.py"
     urllib.request.urlretrieve(GET_PIP_URL, get_pip)
     py = str(bundle / "python.exe")
-    if run([py, "get-pip.py", "--no-warn-script-location"]) != 0:
+    if run([py, str(get_pip), "--no-warn-script-location"]) != 0:
         return False
     get_pip.unlink()
 
@@ -177,7 +197,8 @@ def build_installer() -> bool:
             str(DESKTOP / "installer" / "nanobot-desktop.nsi"),
         ]
     ).returncode
-    exe = OUTPUT / "nanobot-desktop-setup.exe"
+    exes = sorted(OUTPUT.glob("nanobot-desktop-setup-*.exe"))
+    exe = exes[-1] if exes else (OUTPUT / "nanobot-desktop-setup.exe")
     print(f"  {'OK' if rc == 0 and exe.exists() else 'FAIL'}: {exe}")
     return rc == 0 and exe.exists()
 

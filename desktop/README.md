@@ -25,15 +25,15 @@
 │                              ▼                                   │
 │        ┌──────────────────────────────────────────────────┐      │
 │        │  launcher.py  （pythonw 后台控制器，不可见）       │      │
-│        │   1. 启动前端路由 :8766  （秒级就绪）              │      │
+│        │   1. 启动前端路由 :24691  （秒级就绪）              │      │
 │        │   2. 若已配置 → 启动 gateway :8765                │      │
-│        │   3. 打开 Pake 窗口 → http://127.0.0.1:8766       │      │
+│        │   3. 打开 Pake 窗口 → http://127.0.0.1:24691       │      │
 │        │   4. 等待窗口关闭 → 停止 gateway → 退出           │      │
 │        └──────────────────────────────────────────────────┘      │
 │             │                                  │                  │
 │             ▼                                  ▼                  │
 │   ┌──────────────────┐           ┌───────────────────────────┐   │
-│   │  Pake / Tauri    │   HTTP    │  前端路由 :8766            │   │
+│   │  Pake / Tauri    │   HTTP    │  前端路由 :24691            │   │
 │   │  原生窗口         │ ────────► │  （onboard_server.py）     │   │
 │   │  (系统 WebView2) │           │   • 加载动画页（友好等待）  │   │
 │   │  + 中文 locale   │           │   • 网页引导表单（首次）    │   │
@@ -52,13 +52,30 @@
 
 ### 端口约定
 
-| 端口 | 服务 | 说明 |
-|------|------|------|
-| **8766** | 前端路由（launcher 内置） | Pake 窗口的固定入口，**始终秒回**，永不连接被拒 |
-| **8765** | gateway WebSocket / WebUI | nanobot 自带的聊天界面 |
-| **18790** | gateway 健康检查 | `GET /health` → `{"status":"ok"}` |
+| 端口 | 服务 | 说明 | 被占用时 |
+|------|------|------|------|
+| **24691** | 前端路由（launcher 内置） | Pake 窗口的固定入口，**始终秒回**，永不连接被拒 | ⚠️ 不可漂移（Pake 烘焙），见下文 |
+| **8765** | gateway WebSocket / WebUI | nanobot 自带的聊天界面 | ✅ 自动向上漂移到下一个空闲端口 |
+| **18790** | gateway 健康检查 | `GET /health` → `{"status":"ok"}` | ✅ 自动向上漂移到下一个空闲端口 |
 
 > ⚠️ 浏览器/WebUI 界面是 **8765**（由 WebSocket channel 提供），不是 18790（那只是健康端口）。
+
+### 端口冲突与自动漂移
+
+桌面端用到三个 loopback 端口，占用策略按「能否漂移」分两类：
+
+- **可漂移（8765 WebUI、18790 gateway 健康端口）**：`launcher.py` 启动时调用 `backend/ports.py` 检测；若默认端口被占（另一个 nanobot 实例、或无关程序），就**向上逐个找下一个空闲端口**（最多扫 200 个）。漂移后：
+  - WebUI 端口会被回写进 `config.json` 的 `channels.websocket.port`（gateway 只从 config 读这个端口），并同步给前端路由的加载动画跳转地址；
+  - gateway 健康端口通过运行时 `--port` 传给 `nanobot gateway`。
+  - 全过程记在 `~/.nanobot/desktop-launcher.log`（搜 `port drift`）。
+
+- **不可漂移（24691 前端路由）**：Pake 窗口 `nanobot.exe` 的入口 URL 是**构建时烘焙死**的 `http://127.0.0.1:24691`，运行时改不了。所以这个端口选在 IANA 注册区、低于各平台临时端口下限（Linux ≥32768、Windows/macOS ≥49152）、且无主流应用占用 —— **几乎不会冲突**。万一被占，`launcher.py` 会：
+  1. 探测它是不是**另一个 nanobot 实例**（`GET /api/status` 命中我们的 JSON 结构）→ 是则视为「已在运行」，**干净退出、不启第二个实例**；
+  2. 否则判定为**外来程序占用** → 写一条明确错误日志（提示端口被占、需释放后重试）并退出 —— 绝不静默漂移，否则 Pake 会指向 24691 而 router 已挪走，照样连接被拒。
+
+  构建脚本 `build_pake_env.ps1` 同样会在打包前预检 24691 是否空闲，被占则立即报错退出。
+
+> 选号理由：24691 在 1024–32767 之间（避开 Linux 临时端口区 32768+ 和 Windows/macOS 临时端口区 49152+），IANA 未分配，无已知应用使用，因此远比常见的 8765/8766/8080 等教程端口更不易撞车。
 
 ## 工作流程
 
@@ -66,9 +83,9 @@
 
 ```
 快捷方式 → launcher 启动
-   ├─ 前端路由 :8766 就绪（<100ms）
+   ├─ 前端路由 :24691 就绪（<100ms）
    ├─ 检测到无配置 → 不启动 gateway（gateway 必须有 provider 才能起）
-   ├─ 打开 Pake → :8766 → 加载动画 → 跳转 /setup（网页引导表单）
+   ├─ 打开 Pake → :24691 → 加载动画 → 跳转 /setup（网页引导表单）
    │      用户填写：服务商(默认 DeepSeek) / API Key / 模型(默认 deepseek-v4-pro)
    │      [无密码字段]
    ├─ 提交 → 路由写入 config.json（空 token_issue_secret → 免登录）
@@ -80,9 +97,9 @@
 
 ```
 快捷方式 → launcher 启动
-   ├─ 前端路由 :8766 就绪
+   ├─ 前端路由 :24691 就绪
    ├─ 检测到已配置 → 立即启动 gateway :8765
-   ├─ 打开 Pake → :8766 → 路由见 configured && gateway_up → 直接 302 到 :8765
+   ├─ 打开 Pake → :24691 → 路由见 configured && gateway_up → 直接 302 到 :8765
    └─ 用户关窗 → launcher 停止 gateway → 全部退出（不留残余进程）
 ```
 
@@ -93,7 +110,7 @@ desktop/
 ├── backend/
 │   ├── __init__.py
 │   ├── launcher.py            # 零控制台生命周期管理器（pythonw 运行）
-│   └── onboard_server.py      # 前端路由 :8766 + 网页引导 + 加载动画
+│   └── onboard_server.py      # 前端路由 :24691 + 网页引导 + 加载动画
 ├── installer/
 │   └── nanobot-desktop.nsi    # NSIS Windows 安装脚本
 ├── scripts/
@@ -120,7 +137,7 @@ desktop/
 
 通过 `pythonw.exe` 运行（无控制台窗口）。职责：
 
-- 启动前端路由 :8766（**先于一切**，保证 Pake 永不连接被拒）。
+- 启动前端路由 :24691（**先于一切**，保证 Pake 永不连接被拒）。
 - **仅在已配置时**才启动 gateway（gateway 启动需要 provider，见避坑）。
 - 打开唯一的 Pake 窗口。
 - `pake.wait()` 等待用户关窗，`finally` 里停止 gateway + 路由，干净退出。
@@ -128,7 +145,7 @@ desktop/
 
 ### 2. `onboard_server.py` — 前端路由 + 网页引导
 
-一个基于标准库 `http.server` 的极小服务器（绑定 8766，秒级就绪）：
+一个基于标准库 `http.server` 的极小服务器（绑定 24691，秒级就绪）：
 
 | 路由 | 行为 |
 |------|------|
@@ -141,9 +158,9 @@ desktop/
 
 ### 3. Pake / Tauri 原生窗口
 
-用 `pake-cli` 把 `http://127.0.0.1:8766` 封装成原生窗口：
+用 `pake-cli` 把 `http://127.0.0.1:24691` 封装成原生窗口：
 
-- 指向 **8766**（前端路由），不是 8765 —— 这是避免"连接被拒"的关键。
+- 指向 **24691**（前端路由），不是 8765 —— 这是避免"连接被拒"的关键。
 - `--inject inject-locale.js`：构建时嵌入中文 locale 脚本，运行时在 WebView 初始化前把 `localStorage["nanobot.locale"]="zh-CN"` 写好（仅当用户未自选时），让 WebUI 默认中文。
 - 体积约 8.6MB（Rust/Tauri），远小于 Electron。
 
@@ -201,10 +218,10 @@ WebUI 里的「默认权限 / 完全访问权限」只是其中一层。nanobot 
    `build_provider_snapshot` 在无 API key 时直接抛错退出。所以 launcher **不能**在未配置时启动 gateway —— 必须先走网页引导、写入配置，再启动 gateway。`launcher.py` 的 `config_is_configured()` 判断就是这个目的。
 
 3. **不要直接双击 `nanobot.exe`**
-   `nanobot.exe` 只是 WebView 壳，**不会**自己启动后端。必须通过快捷方式（→ launcher）启动，由 launcher 拉起路由 + gateway。直接双击 exe 会因 8766 没人监听而 `ERR_CONNECTION_REFUSED`。
+   `nanobot.exe` 只是 WebView 壳，**不会**自己启动后端。必须通过快捷方式（→ launcher）启动，由 launcher 拉起路由 + gateway。直接双击 exe 会因 24691 没人监听而 `ERR_CONNECTION_REFUSED`。
 
 4. **Pake 构建时目标 URL 必须在线**
-   `pake-cli` 构建时会抓取页面。构建 8766 的 Pake 前，**必须先临时启动 `onboard_server.py`**（它在 8766 提供页面），否则构建失败。
+   `pake-cli` 构建时会抓取页面。构建 24691 的 Pake 前，**必须先临时启动 `onboard_server.py`**（它在 24691 提供页面），否则构建失败。
 
 5. **Pake/Tauri 编译需要 VS Build Tools**
    Rust MSVC 目标需要 `link.exe` + Windows SDK（`kernel32.lib` 等）。需安装 **VS 2022 Build Tools 的 VCTools workload**。注意：Git Bash 自带的 `/usr/bin/link.exe`（Unix 硬链接工具）会和 MSVC `link.exe` 冲突，构建时要用 `build_pake_env.ps1`（它走 `vcvars64.bat` 把 MSVC 工具加到 PATH 前面）。
@@ -255,7 +272,7 @@ python -m pip wheel . --no-deps -w desktop/output/wheels/
 #    见 build_all.py 的 build_python_bundle 步骤
 
 # 4. 构建 Pake（需 VS Build Tools + 临时启动路由）
-python desktop/backend/onboard_server.py &   # 临时提供 8766 页面
+python desktop/backend/onboard_server.py &   # 临时提供 24691 页面
 powershell -File desktop/scripts/build_pake_env.ps1
 
 # 5. 生成 Windows 安装包
@@ -298,7 +315,7 @@ makensis \
 # 1. 临时启动前端路由（pake 构建要抓页面）
 python desktop/backend/onboard_server.py &
 # 2. 双架构（Intel + ARM 合并到一个 .dmg）
-pake http://127.0.0.1:8766 --name nanobot \
+pake http://127.0.0.1:24691 --name nanobot \
   --icon desktop/assets/nanobot_icon.png \
   --width 1100 --height 720 --multi-arch \
   --inject desktop/assets/inject-locale.js
@@ -322,11 +339,12 @@ pake http://127.0.0.1:8766 --name nanobot \
 
 - **快捷方式点了没反应**：看 `~/.nanobot/desktop-launcher.log`。多半是 embeddable `_pth` 导致 import 失败（见避坑 #1）。
 - **窗口显示 `ERR_CONNECTION_REFUSED`**：说明没通过快捷方式启动（launcher 没跑）。用快捷方式启动；别直接双击 `nanobot.exe`。
+- **启动后立刻退出 / 日志里出现 `router port ... is occupied`**：24691 被其他程序占了（Pake 烘焙端口不可漂移）。查 `desktop-launcher.log`：若提示 `another nanobot desktop is already serving` 说明已有一个实例在跑（正常，单实例退出）；否则是外来程序占用 24691，关掉它再启动。8765/18790 被占会**自动漂移**，日志里有 `port drift` 行，无需干预。
 - **WebUI 还弹登录页**：config 里残留 `token_issue_secret`。删掉该字段（见避坑 #6）。
 - **Pake 构建失败（link.exe / kernel32.lib 找不到）**：装 VS Build Tools VCTools，用 `build_pake_env.ps1` 构建（见避坑 #5）。
 
 ## 开发调试
 
-- **单独跑前端路由**：`python desktop/backend/onboard_server.py` → 访问 `http://127.0.0.1:8766`。
+- **单独跑前端路由**：`python desktop/backend/onboard_server.py` → 访问 `http://127.0.0.1:24691`。
 - **看 launcher 行为**：`tail -f ~/.nanobot/desktop-launcher.log`。
 - **临时清空配置模拟首次**：`mv ~/.nanobot/config.json ~/.nanobot/config.json.bak`。

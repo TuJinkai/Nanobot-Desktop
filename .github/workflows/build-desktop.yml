@@ -60,7 +60,7 @@ jobs:
         run: |
           python desktop/backend/onboard_server.py >/tmp/router.log 2>&1 &
           sleep 3
-          curl -s http://127.0.0.1:8766/api/status || true
+          curl -s http://127.0.0.1:24691/api/status || true
         shell: bash
 
       # --- 4. Pake 桌面窗口 ------------------------------------------------
@@ -70,7 +70,7 @@ jobs:
       - name: 构建 Pake（含中文注入）
         working-directory: desktop/output
         run: |
-          pake http://127.0.0.1:8766 \
+          pake http://127.0.0.1:24691 \
             --name nanobot \
             --icon "$GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png" \
             --width 1100 --height 720 \

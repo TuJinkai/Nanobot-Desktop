@@ -1,6 +1,6 @@
 {
   "app": {
-    "brand": "nanobot",
+    "brand": "算小智nanobot",
     "loading": {
       "connecting": "nanobot에 연결 중…",
       "boot": "nanobot 불러오는 중…"
@@ -33,8 +33,8 @@
       "completed": "{{seconds}}초 만에 다시 시작되었습니다."
     },
     "documentTitle": {
-      "base": "nanobot",
-      "chat": "{{title}} · nanobot"
+      "base": "算小智nanobot",
+      "chat": "{{title}} · 算小智nanobot"
     },
     "meta": {
       "description": "nanobot 웹 UI — nanobot 작업공간과 대화하세요."

@@ -1,4 +1,4 @@
-; ======================================================================
+﻿; ======================================================================
 ; nanobot Desktop - Windows Installer (NSIS)
 ; ======================================================================
 ;
@@ -31,14 +31,14 @@ Unicode true
 ; ----------------------------------------------------------------------
 ; Branding
 ; ----------------------------------------------------------------------
-!define PRODUCT_NAME "nanobot Desktop"
+!define PRODUCT_NAME "算小智nanobot Desktop"
 !define PRODUCT_PUBLISHER "nanobot"
-!define PRODUCT_VERSION "0.2.2"
+!define PRODUCT_VERSION "0.2.2-logo"
 !define PRODUCT_WEB_SITE "https://github.com/HKUDS/nanobot"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\nanobot-desktop.exe"
 
 Name "${PRODUCT_NAME} ${PRODUCT_VERSION}"
-OutFile "${OUTPUT_DIR}\nanobot-desktop-setup.exe"
+OutFile "${OUTPUT_DIR}\nanobot-desktop-setup-${PRODUCT_VERSION}.exe"
 InstallDir "$PROGRAMFILES64\nanobot Desktop"
 RequestExecutionLevel admin
 SetCompressor /SOLID lzma
@@ -90,6 +90,7 @@ Section "nanobot Desktop" SecMain
     File "${BACKEND_DIR}\__init__.py"
     File "${BACKEND_DIR}\launcher.py"
     File "${BACKEND_DIR}\onboard_server.py"
+    File "${BACKEND_DIR}\ports.py"
     SetOutPath "$INSTDIR"
 
     ; --- Pake/Tauri desktop app (native WebView wrapper) ---
@@ -145,6 +146,11 @@ Section "nanobot Desktop" SecMain
 
     WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "" "$INSTDIR\nanobot.exe"
     WriteRegStr HKLM "${PRODUCT_DIR_REGKEY}" "Path" "$INSTDIR"
+
+    ; Refresh the shell icon cache so upgraded shortcuts show the new icon
+    ; immediately.  Windows keeps the cached icon when a file at the same path
+    ; is overwritten; SHCNE_ASSOCCHANGED tells the shell to drop & rebuild it.
+    System::Call 'shell32::SHChangeNotify(i 0x08000000, i 0, i 0, i 0)'
 SectionEnd
 
 ; ----------------------------------------------------------------------

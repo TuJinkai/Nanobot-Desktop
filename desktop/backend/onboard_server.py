@@ -21,9 +21,33 @@ import socket
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-ROUTER_PORT = 8766
-GATEWAY_PORT = 8765
-GATEWAY_URL = f"http://127.0.0.1:{GATEWAY_PORT}"
+ROUTER_PORT = 24691  # Pake-baked entry; sparse, sub-ephemeral range → rarely taken
+GATEWAY_PORT = 8765  # default WebUI (WebSocket) port; may drift at runtime
+
+# The WebUI port the router redirects to / probes.  Resolved by launcher.py at
+# startup (it drifts upward when 8765 is occupied); defaults to GATEWAY_PORT so
+# standalone ``python onboard_server.py`` still works without a launcher.
+_webui_port: int = GATEWAY_PORT
+
+
+def configure_webui_port(port: int) -> None:
+    """Pin the WebUI port after the launcher has resolved any drift.
+
+    Called before requests are served so the loader redirect, the
+    ``/api/status`` probe, and the onboarding-written config all agree on one
+    port (which may differ from GATEWAY_PORT when 8765 was taken).
+    """
+    global _webui_port
+    _webui_port = int(port)
+
+
+def webui_port() -> int:
+    """The WebUI port currently in use (possibly drifted from the default)."""
+    return _webui_port
+
+
+def gateway_url() -> str:
+    return f"http://127.0.0.1:{_webui_port}"
 
 PROVIDERS = [
     {"id": "deepseek", "label": "DeepSeek (深度求索)", "base": "https://api.deepseek.com/v1", "model": "deepseek-v4-pro"},
@@ -44,7 +68,7 @@ PROVIDERS = [
 
 def gateway_up() -> bool:
     try:
-        with socket.create_connection(("127.0.0.1", GATEWAY_PORT), timeout=0.5):
+        with socket.create_connection(("127.0.0.1", _webui_port), timeout=0.5):
             return True
     except OSError:
         return False
@@ -105,7 +129,7 @@ def build_and_save_config(*, provider, api_key, model, api_base=None) -> None:
     # Enable the local WebUI. token_issue_secret left empty => passwordless for localhost.
     config.channels.websocket = {
         "enabled": True,
-        "port": GATEWAY_PORT,
+        "port": _webui_port,
     }
     save_config(config, get_config_path())
 
@@ -130,7 +154,7 @@ _PAGE_CSS = """
 def _loader_html() -> str:
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>nanobot</title><style>{_PAGE_CSS}
+<title>算小智nanobot</title><style>{_PAGE_CSS}
   .center {{ text-align:center; }}
   .logo {{ font-size:52px; line-height:1; margin-bottom:18px; }}
   .title {{ font-size:20px; margin-bottom:6px; }}
@@ -141,8 +165,8 @@ def _loader_html() -> str:
   @keyframes bounce {{ 0%,80%,100%{{ transform:scale(.6); opacity:.4; }} 40%{{ transform:scale(1); opacity:1; }} }}
 </style></head>
 <body><div class="card center">
-  <div class="logo">🐈</div>
-  <div class="title" id="t">正在启动 nanobot…</div>
+  <div class="logo">🤖</div>
+  <div class="title" id="t">正在启动 算小智nanobot…</div>
   <div class="sub" id="s">首次启动需要几秒钟，请稍候</div>
   <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
 </div>
@@ -151,8 +175,8 @@ async function poll(){{
   try {{
     const r = await fetch('/api/status', {{cache:'no-store'}}); const j = await r.json();
     if (!j.configured) {{ window.location.replace('/setup'); return; }}
-    if (j.gateway_up)  {{ window.location.replace('{GATEWAY_URL}'); return; }}
-    document.getElementById('t').textContent = '正在启动 nanobot…';
+    if (j.gateway_up)  {{ window.location.replace('{gateway_url()}'); return; }}
+    document.getElementById('t').textContent = '正在启动 算小智nanobot…';
     document.getElementById('s').textContent = '后端即将就绪…';
   }} catch(e) {{}}
   setTimeout(poll, 800);
@@ -168,7 +192,7 @@ def _onboarding_html() -> str:
     )
     return f"""<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"/>
 <meta name="viewport" content="width=device-width,initial-scale=1"/>
-<title>nanobot · 初始化</title><style>{_PAGE_CSS}
+<title>算小智nanobot · 初始化</title><style>{_PAGE_CSS}
   .logo {{ font-size:40px; line-height:1; margin-bottom:4px; }}
   h1 {{ font-size:22px; margin:6px 0 4px; }}
   .sub {{ color:var(--muted); font-size:14px; margin-bottom:26px; }}
@@ -189,8 +213,8 @@ def _onboarding_html() -> str:
   @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
 </style></head>
 <body><form class="card" id="form" autocomplete="off">
-  <div class="logo">🐈</div>
-  <h1>欢迎使用 nanobot</h1>
+  <div class="logo">🤖</div>
+  <h1>欢迎使用 算小智nanobot</h1>
   <div class="sub">填写下方信息即可开始，整个过程不到一分钟。</div>
   <label for="provider">AI 服务商</label>
   <select id="provider">{provider_opts}</select>
@@ -224,7 +248,7 @@ $('form').addEventListener('submit',async e=>{{ e.preventDefault();
     model:$('model').value.trim()}};
   if(!body.api_key||!body.model){{msg.className='msg err';msg.textContent='请填写所有字段。';return;}}
   btn.disabled=true;msg.className='msg';
-  msg.innerHTML='<span class="spinner"></span>正在保存并启动 nanobot…';
+  msg.innerHTML='<span class="spinner"></span>正在保存并启动 算小智nanobot…';
   try{{ const r=await fetch('/api/setup',{{method:'POST',headers:{{'Content-Type':'application/json'}},body:JSON.stringify(body)}});
     const j=await r.json();
     if(j.ok){{ msg.className='msg ok';msg.innerHTML='<span class="spinner"></span>设置完成，正在打开聊天界面…';
@@ -260,7 +284,7 @@ def make_handler(*, on_setup, ready_event):
             if self.path in ("/", "/index.html"):
                 if config_is_configured() and gateway_up():
                     self.send_response(302)
-                    self.send_header("Location", GATEWAY_URL)
+                    self.send_header("Location", gateway_url())
                     self.end_headers()
                     return
                 return self._send(200, _loader_html().encode("utf-8"))

@@ -3,7 +3,11 @@
 Run via ``pythonw.exe`` so NO console window ever appears.
 
 Flow:
-  1. Start the frontend router on 8766 (binds instantly → Pake never sees
+  0. Resolve ports (ports.py): the router port 24691 is Pake-baked and
+     immutable — if it is taken, distinguish our own instance (→ exit) from a
+     foreign app (→ error) instead of drifting. The WebUI (8765) and gateway
+     (18790) ports drift upward to the next free port when occupied.
+  1. Start the frontend router on 24691 (binds instantly → Pake never sees
      "connection refused"; it shows a friendly loading animation instead).
   2. Open the single Pake window at the router.
   3. Start the gateway silently.  The router's loader polls until it is up,
@@ -32,9 +36,8 @@ _HERE = os.path.dirname(os.path.abspath(__file__))
 if _HERE not in sys.path:
     sys.path.insert(0, _HERE)
 
-ROUTER_PORT = 8766
-GATEWAY_WS_PORT = 8765
-GATEWAY_HEALTH_PORT = 18790
+# Port defaults & drift logic live in ports.py (imported lazily in main()).
+# The router port is Pake-baked and immutable; webui/gateway drift when busy.
 
 
 # ---------------------------------------------------------------------------
@@ -103,14 +106,15 @@ def _clean_env() -> dict[str, str]:
 
 
 class Gateway:
-    def __init__(self) -> None:
+    def __init__(self, health_port: int) -> None:
+        self._health_port = health_port
         self._proc: subprocess.Popen | None = None
 
     def start(self) -> None:
         self.stop()
         cmd = [
             _pythonw_exe(), "-m", "nanobot", "gateway",
-            "--foreground", "--port", str(GATEWAY_HEALTH_PORT),
+            "--foreground", "--port", str(self._health_port),
         ]
         kwargs: dict[str, Any] = {"env": _clean_env(), "stdin": subprocess.DEVNULL,
                                   "stdout": subprocess.DEVNULL, "stderr": subprocess.DEVNULL}
@@ -176,22 +180,105 @@ def launch_pake(url: str) -> subprocess.Popen | None:
 # ---------------------------------------------------------------------------
 
 
+def _ensure_webui_port_in_config(webui_port: int) -> None:
+    """Patch ``channels.websocket.port`` in the saved config to ``webui_port``.
+
+    The gateway reads its WebUI port *only* from config (there is no CLI flag
+    for it), so when 8765 was occupied and we drifted to another port we must
+    write that port back into config before starting the gateway — otherwise it
+    would try to bind the old, still-occupied port and fail.
+
+    No-op when no config exists yet (first run: onboarding writes it instead,
+    via onboard_server which has already been pinned to the same port).  All
+    errors are logged and swallowed: a failure here must not abort the launch.
+    """
+    try:
+        from nanobot.config.loader import get_config_path, load_config, save_config
+    except Exception as exc:  # noqa: BLE001
+        log.warning("config loader unavailable, cannot patch websocket port: %s", exc)
+        return
+    path = get_config_path()
+    if not path.exists():
+        return
+    try:
+        cfg = load_config(path)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not load config to patch websocket port: %s", exc)
+        return
+    ws = getattr(cfg.channels, "websocket", None)
+    ws = dict(ws) if isinstance(ws, dict) else {}
+    if ws.get("port") == webui_port:
+        return  # already matches; nothing to write
+    ws["port"] = webui_port
+    ws.setdefault("enabled", True)
+    try:
+        cfg.channels.websocket = ws
+        save_config(cfg, path)
+        log.info("patched channels.websocket.port → %d", webui_port)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("could not save patched websocket port: %s", exc)
+
+
 def main() -> int:
-    from onboard_server import OnboardRouter, ROUTER_PORT, GATEWAY_PORT, config_is_configured
+    import ports as ports_mod
+    from onboard_server import (
+        OnboardRouter,
+        ROUTER_PORT,
+        configure_webui_port,
+        config_is_configured,
+    )
 
     log.info("=== launcher start (python=%s) ===", sys.executable)
-    gateway = Gateway()
+
+    # 0. Resolve ports.  The router port is Pake-baked (immutable): if it is
+    #    already taken we must NOT silently drift it — the Pake window would
+    #    still navigate to the baked port and see connection-refused.  Tell our
+    #    own instance (→ exit cleanly, single-instance) apart from a foreign app
+    #    (→ clear error).  24691 is picked to make this almost never happen.
+    if ports_mod.port_in_use(ROUTER_PORT):
+        if ports_mod.probe_nanobot_router(ROUTER_PORT):
+            log.info(
+                "another nanobot desktop is already serving on :%d — "
+                "not starting a second instance", ROUTER_PORT,
+            )
+            return 0
+        log.error(
+            "router port %d is occupied by a non-nanobot process. The Pake "
+            "window is baked to this port and cannot drift. Free port %d "
+            "(close the app holding it) and relaunch.",
+            ROUTER_PORT, ROUTER_PORT,
+        )
+        return 1
+
+    # webui (8765) and gateway/health (18790) drift upward to the next free port.
+    resolved = ports_mod.resolve_ports(router=ROUTER_PORT)
+    if resolved.webui_drifted or resolved.gateway_drifted:
+        log.info(
+            "port drift: webui %d→%d, gateway %d→%d",
+            ports_mod.DEFAULT_WEBUI_PORT, resolved.webui,
+            ports_mod.DEFAULT_GATEWAY_PORT, resolved.gateway,
+        )
+    log.info(
+        "resolved ports: router=%d webui=%d gateway=%d",
+        resolved.router, resolved.webui, resolved.gateway,
+    )
+
+    # Pin the resolved WebUI port into onboard_server so its loader redirect,
+    # /api/status probe, and onboarding-written config all agree.
+    configure_webui_port(resolved.webui)
+
+    gateway = Gateway(resolved.gateway)
     gateway_ready = threading.Event()
 
     def bring_up_gateway() -> bool:
-        """Start the gateway and wait for its port. Returns True if up."""
+        """Start the gateway and wait for the WebUI port. Returns True if up."""
         gateway.start()
         for _ in range(90):
-            if _port_open(GATEWAY_PORT):
-                log.info("gateway is up on %d", GATEWAY_PORT)
+            if _port_open(resolved.webui):
+                log.info("gateway is up (webui on %d)", resolved.webui)
                 return True
             time.sleep(1)
-        log.error("gateway did not come up on %d", GATEWAY_PORT)
+        log.error("gateway did not come up (webui port %d)", resolved.webui)
         return False
 
     def on_setup() -> None:
@@ -213,6 +300,7 @@ def main() -> int:
     #    the gateway is launched via on_setup() once the user submits it.
     if config_is_configured():
         log.info("config present — starting gateway immediately")
+        _ensure_webui_port_in_config(resolved.webui)
         bring_up_gateway()
     else:
         log.info("no config yet — waiting for web onboarding before starting gateway")

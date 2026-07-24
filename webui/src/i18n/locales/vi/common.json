@@ -1,6 +1,6 @@
 {
   "app": {
-    "brand": "nanobot",
+    "brand": "算小智nanobot",
     "loading": {
       "connecting": "Đang kết nối tới nanobot…",
       "boot": "Đang tải nanobot…"
@@ -33,8 +33,8 @@
       "completed": "Khởi động lại hoàn tất sau {{seconds}} giây."
     },
     "documentTitle": {
-      "base": "nanobot",
-      "chat": "{{title}} · nanobot"
+      "base": "算小智nanobot",
+      "chat": "{{title}} · 算小智nanobot"
     },
     "meta": {
       "description": "Giao diện web nanobot — trò chuyện với workspace nanobot của bạn."

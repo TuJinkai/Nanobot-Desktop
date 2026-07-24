@@ -1,6 +1,6 @@
 {
   "app": {
-    "brand": "nanobot",
+    "brand": "算小智nanobot",
     "loading": {
       "connecting": "Conectando con nanobot…",
       "boot": "Cargando nanobot…"
@@ -33,8 +33,8 @@
       "completed": "Reinicio completado en {{seconds}} s."
     },
     "documentTitle": {
-      "base": "nanobot",
-      "chat": "{{title}} · nanobot"
+      "base": "算小智nanobot",
+      "chat": "{{title}} · 算小智nanobot"
     },
     "meta": {
       "description": "Interfaz web de nanobot: conversa con tu espacio de trabajo de nanobot."
