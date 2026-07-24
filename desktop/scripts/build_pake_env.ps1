@@ -1,8 +1,8 @@
-# 构建 Pake 桌面窗口（带 VS MSVC 环境）。
+﻿# 构建 Pake 桌面窗口（带 VS MSVC 环境）。
 #
 # 做三件事：
 #   1. 走 vcvars64.bat 配好 MSVC 环境（link.exe + Windows SDK）
-#   2. 临时启动前端路由 onboard_server.py（:8766），供 pake-cli 构建时抓取页面
+#   2. 临时启动前端路由 onboard_server.py（:24691），供 pake-cli 构建时抓取页面
 #   3. 用 pake-cli 构建 → output/nanobot.exe（含中文 locale 注入）
 #
 # 前置：Rust (rustup)、VS 2022 Build Tools (VCTools)、Node + pake-cli (npm i -g pake-cli)。
@@ -20,6 +20,24 @@ $backend = Join-Path $desktop "backend"
 $inject = Join-Path $assets "inject-locale.js"
 $icon = Join-Path $assets "nanobot_icon.png"
 
+# --- 0. 确认 Pake 烘焙端口空闲（不可漂移）--------------------------------
+# Pake 入口 URL 在构建时烘焙进 nanobot.exe，运行时无法漂移，所以构建/运行都
+# 必须能用这个端口。24691 选在 IANA 注册区且低于各平台临时端口下限，极少冲突。
+$RouterPort = 24691
+function Test-PortFree([int]$Port) {
+    try {
+        $listener = [System.Net.Sockets.TcpListener]::new([System.Net.IPAddress]::Loopback, $Port)
+        $listener.Start(); $listener.Stop()
+        return $true
+    } catch {
+        return $false
+    }
+}
+if (-not (Test-PortFree $RouterPort)) {
+    Write-Host "端口 $RouterPort 已被占用。Pake 入口烘焙在该端口、无法漂移；请释放后重试。" -ForegroundColor Red
+    exit 1
+}
+
 # --- 1. MSVC 环境 ----------------------------------------------------------
 Write-Host "=== 配置 MSVC 构建环境 ===" -ForegroundColor Cyan
 $vcvars = $env:PAKE_VCVARS
@@ -36,8 +54,12 @@ cmd /c "`"$vcvars`" > nul && set" | ForEach-Object {
 }
 Write-Host "MSVC link.exe:" -ForegroundColor Green
 cmd /c "where link.exe" | Select-Object -First 2
+# tauri-build shells out to vswhere to locate the toolchain; vcvars does not
+# put it on PATH, so add the VS Installer dir explicitly (benign if absent).
+$vswhere = "C:\Program Files (x86)\Microsoft Visual Studio\Installer\vswhere.exe"
+if (Test-Path $vswhere) { $env:PATH = (Split-Path $vswhere) + ';' + $env:PATH }
 
-# --- 2. 临时启动前端路由（:8766）-------------------------------------------
+# --- 2. 临时启动前端路由（:24691）-------------------------------------------
 Write-Host "`n=== 临时启动前端路由（供 pake 抓取页面）===" -ForegroundColor Cyan
 $pyExe = Join-Path $output "python-bundle\python.exe"
 if (-not (Test-Path $pyExe)) { $pyExe = "python" }
@@ -48,21 +70,25 @@ $router = Start-Process -FilePath $pyExe `
 Start-Sleep -Seconds 2
 
 # --- 3. 构建 Pake ----------------------------------------------------------
-Write-Host "`n=== 构建 Pake（:8766 + 中文注入）===" -ForegroundColor Cyan
+Write-Host "`n=== 构建 Pake（:24691 + 中文注入）===" -ForegroundColor Cyan
 New-Item -ItemType Directory -Force -Path $output | Out-Null
 
 $pakeCmd = "$env:APPDATA\npm\pake.cmd"
-$args = @("/c", "`"$pakeCmd`" http://127.0.0.1:8766 --name nanobot --icon `"$icon`" --width 1100 --height 720 --inject `"$inject`"")
+# Invoke pake-cli with the call operator (&). `Start-Process -Wait` hangs on
+# pake-cli's spawned tauri/wix subprocess tree (it never returns); & runs it
+# inline, returns cleanly, and $LASTEXITCODE carries the exit code. (Not
+# `cmd /c "pake.cmd" …` — that trips cmd's quote rules and errors out.)
 Push-Location $output
-$proc = Start-Process -FilePath "cmd.exe" -ArgumentList $args -Wait -NoNewWindow -PassThru
+& $pakeCmd http://127.0.0.1:24691 --name nanobot --icon $icon --width 1100 --height 720 --inject $inject
+$pakeExit = $LASTEXITCODE
 Pop-Location
 
 # 停止临时路由
 Stop-Process -Id $router.Id -Force -ErrorAction SilentlyContinue
 
-if ($proc.ExitCode -ne 0) {
-    Write-Host "`n=== Pake 构建失败 (exit $($proc.ExitCode)) ===" -ForegroundColor Red
-    exit $proc.ExitCode
+if ($pakeExit -ne 0) {
+    Write-Host "`n=== Pake 构建失败 (exit $pakeExit) ===" -ForegroundColor Red
+    exit $pakeExit
 }
 
 # 拷贝产物 → output/nanobot.exe
