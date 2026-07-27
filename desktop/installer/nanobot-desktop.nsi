@@ -106,8 +106,16 @@ Section "nanobot Desktop" SecMain
     SetOutPath "$INSTDIR"
 
     ; --- Pake/Tauri desktop app (native WebView wrapper) ---
+    ; Windows 上 Pake 可能产出 .exe 或 .msi，根据实际文件处理
     DetailPrint "Installing Pake desktop app..."
-    File "${OUTPUT_DIR}\nanobot.exe"
+    ${If} ${FileExists} "${OUTPUT_DIR}\nanobot.exe"
+      File "${OUTPUT_DIR}\nanobot.exe"
+    ${ElseIf} ${FileExists} "${OUTPUT_DIR}\nanobot.msi"
+      File "${OUTPUT_DIR}\nanobot.msi"
+    ${Else}
+      DetailPrint "ERROR: nanobot.exe/msi not found in ${OUTPUT_DIR}"
+      Abort
+    ${EndIf}
     SetOutPath "$INSTDIR"
 
     ; --- Create shortcuts ---
@@ -177,6 +185,7 @@ Section "Uninstall"
     RMDir /r "$INSTDIR\backend"
     RMDir /r "$INSTDIR\assets"
     Delete "$INSTDIR\nanobot.exe"
+    Delete "$INSTDIR\nanobot.msi"
     Delete "$INSTDIR\uninst.exe"
     RMDir "$INSTDIR"
 
