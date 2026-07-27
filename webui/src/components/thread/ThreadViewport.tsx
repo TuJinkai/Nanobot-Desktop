@@ -22,10 +22,11 @@ import {
   promptTop,
 } from "@/components/thread/promptNavigation";
 import { cn } from "@/lib/utils";
-import type { CliAppInfo, McpPresetInfo, UIMessage } from "@/lib/types";
+import type { CliAppInfo, McpPresetInfo, SlashCommand, UIMessage } from "@/lib/types";
 
 export interface ThreadViewportHandle {
   jumpToUserPrompt: (promptId: string) => void;
+  cancelAutoScroll: () => void;
 }
 
 interface ThreadViewportProps {
@@ -39,6 +40,7 @@ interface ThreadViewportProps {
   showScrollToBottomButton?: boolean;
   cliApps?: CliAppInfo[];
   mcpPresets?: McpPresetInfo[];
+  slashCommands?: SlashCommand[];
   forkBoundaryMessageCount?: number | null;
   hasMoreBefore?: boolean;
   loadingOlder?: boolean;
@@ -46,6 +48,7 @@ interface ThreadViewportProps {
   onLoadOlder?: () => Promise<void> | void;
   onOpenFilePreview?: (path: string) => void;
   onForkFromMessage?: (beforeUserIndex: number) => void;
+  onQuoteSelection?: (text: string) => void;
 }
 
 const NEAR_BOTTOM_PX = 48;
@@ -110,6 +113,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   showScrollToBottomButton = true,
   cliApps = [],
   mcpPresets = [],
+  slashCommands = [],
   forkBoundaryMessageCount = null,
   hasMoreBefore = false,
   loadingOlder = false,
@@ -117,6 +121,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   onLoadOlder,
   onOpenFilePreview,
   onForkFromMessage,
+  onQuoteSelection,
 }, ref) {
   const { t } = useTranslation();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -137,6 +142,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   const [atBottom, setAtBottom] = useState(true);
   const [composerDockHeight, setComposerDockHeight] = useState(0);
   const [keyboardInsetBottom, setKeyboardInsetBottom] = useState(0);
+  const [hasVerticalOverflow, setHasVerticalOverflow] = useState(false);
   const [visibleMessageCount, setVisibleMessageCount] =
     useState(INITIAL_HISTORY_WINDOW);
   const hasMessages = messages.length > 0;
@@ -290,7 +296,14 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     setVisibleMessageCount((count) => Math.max(count, messages.length - index));
   }, [messages]);
 
-  useImperativeHandle(ref, () => ({ jumpToUserPrompt }), [jumpToUserPrompt]);
+  useImperativeHandle(
+    ref,
+    () => ({
+      jumpToUserPrompt,
+      cancelAutoScroll: cancelScheduledBottomScroll,
+    }),
+    [cancelScheduledBottomScroll, jumpToUserPrompt],
+  );
 
   const measureComposerDock = useCallback(() => {
     const el = composerDockRef.current;
@@ -447,6 +460,13 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     measureComposerDock();
   }, [composer, hasMessages, measureComposerDock]);
 
+  useLayoutEffect(() => {
+    if (!hasMessages || userReadingHistoryRef.current) return;
+    const promptId = activeTurnPromptRef.current;
+    if (promptId && scrollToPromptTopNow(promptId)) return;
+    scrollToBottom(false, 2);
+  }, [composerDockHeight, hasMessages, scrollToBottom, scrollToPromptTopNow]);
+
   useEffect(() => cancelScheduledBottomScroll, [cancelScheduledBottomScroll]);
 
   useEffect(() => {
@@ -456,6 +476,29 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
     observer.observe(target);
     return () => observer.disconnect();
   }, [hasMessages, measureComposerDock]);
+
+  const measureVerticalOverflow = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const next = el.scrollHeight > el.clientHeight + 1;
+    setHasVerticalOverflow((current) => (current === next ? current : next));
+  }, []);
+
+  useLayoutEffect(() => {
+    const el = scrollRef.current;
+    const content = contentRef.current;
+    if (!el) return;
+
+    measureVerticalOverflow();
+    const observer = typeof ResizeObserver === "undefined" ? null : new ResizeObserver(measureVerticalOverflow);
+    observer?.observe(el);
+    if (content) observer?.observe(content);
+    window.addEventListener("resize", measureVerticalOverflow);
+    return () => {
+      observer?.disconnect();
+      window.removeEventListener("resize", measureVerticalOverflow);
+    };
+  }, [composerDockHeight, hasMessages, measureVerticalOverflow, visibleMessages.length]);
 
   useEffect(() => {
     const el = scrollRef.current;
@@ -467,7 +510,7 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
       const programmaticPromptTop = programmaticPromptScrollTopRef.current;
       const programmatic =
         programmaticPromptTop !== null && Math.abs(el.scrollTop - programmaticPromptTop) < 2;
-      setAtBottom(near);
+      setAtBottom((current) => current === near ? current : near);
       if (programmatic) {
         programmaticPromptScrollTopRef.current = null;
         if (near) userReadingHistoryRef.current = false;
@@ -486,11 +529,12 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
   }, [maybeLoadEarlierFromScroll]);
 
   return (
-    <div className="relative flex min-h-0 flex-1 overflow-hidden">
+    <div className="thread-viewport relative flex min-h-0 flex-1 overflow-hidden">
       <div
         ref={scrollRef}
         className={cn(
-          "thread-viewport-scrollbar absolute inset-0 overflow-y-auto scroll-auto scrollbar-thin",
+          "thread-viewport-scrollbar absolute inset-0 scroll-auto scrollbar-thin",
+          hasVerticalOverflow ? "overflow-y-auto" : "overflow-hidden",
           "[&::-webkit-scrollbar]:w-1.5",
           "[&::-webkit-scrollbar-thumb]:rounded-full",
           "[&::-webkit-scrollbar-thumb]:bg-muted-foreground/30",
@@ -511,9 +555,11 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
                   hiddenUserMessageCount={hiddenUserMessageCount}
                   cliApps={cliApps}
                   mcpPresets={mcpPresets}
+                  slashCommands={slashCommands}
                   forkBoundaryMessageCount={visibleForkBoundaryMessageCount}
                   onOpenFilePreview={onOpenFilePreview}
                   onForkFromMessage={onForkFromMessage}
+                  onQuoteSelection={onQuoteSelection}
                 />
               </div>
             </div>
@@ -530,9 +576,12 @@ export const ThreadViewport = forwardRef<ThreadViewportHandle, ThreadViewportPro
           </div>
         ) : (
           <div ref={contentRef} className="mx-auto flex min-h-full w-full max-w-[72rem] flex-col px-3 sm:px-4">
-            <div className="flex w-full flex-1 items-center justify-center py-6 sm:py-12">
-              <div className="relative flex w-full max-w-[58rem] flex-col items-center gap-5 sm:block">
-                <div className="flex justify-center sm:absolute sm:inset-x-0 sm:bottom-[calc(100%+1.5rem)]">
+            <div className="flex w-full flex-1 flex-col items-center pb-[calc(0.75rem+env(safe-area-inset-bottom))] pt-6 sm:justify-center sm:py-12">
+              <div
+                data-testid="thread-welcome-layout"
+                className="relative grid w-full max-w-[58rem] flex-1 grid-rows-[minmax(min-content,1fr)_auto] gap-8 sm:block sm:flex-none"
+              >
+                <div className="flex min-h-0 min-w-0 w-full items-center justify-center sm:absolute sm:inset-x-0 sm:bottom-[calc(100%+2rem)]">
                   {emptyState}
                 </div>
                 <div className="w-full">{composer}</div>

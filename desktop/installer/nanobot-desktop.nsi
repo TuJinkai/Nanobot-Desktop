@@ -33,7 +33,7 @@ Unicode true
 ; ----------------------------------------------------------------------
 !define PRODUCT_NAME "算小智nanobot Desktop"
 !define PRODUCT_PUBLISHER "nanobot"
-!define PRODUCT_VERSION "0.2.2-logo"
+!define PRODUCT_VERSION "0.3.0-logo"
 !define PRODUCT_WEB_SITE "https://github.com/HKUDS/nanobot"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\nanobot-desktop.exe"
 

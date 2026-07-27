@@ -18,7 +18,7 @@
 
 {
   "name": "nanobot",
-  "version": "0.2.2",
+  "version": "0.3.0",
   "url": "http://127.0.0.1:24691",
   "window": {
     "title": "nanobot",
