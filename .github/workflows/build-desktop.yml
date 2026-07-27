@@ -85,7 +85,8 @@ jobs:
             --identifier com.nanobot.desktop \
             --icon "$GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png" \
             --width 1100 --height 720 \
-            --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js"
+            --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js" \
+            --format exe
         shell: bash
 
       # Pake 构建产物不在 working-directory，需要拷贝到 desktop/output/
