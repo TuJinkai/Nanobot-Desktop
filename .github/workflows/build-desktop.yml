@@ -1,7 +1,8 @@
 name: build-desktop
 
-# 构建 nanobot Desktop：Windows x64 + macOS (Intel + ARM)。
-# macOS 包无法在 Windows 交叉构建（需 macOS SDK+Xcode），故用对应平台 runner。
+# 构建 nanobot Desktop：Windows x64 + macOS ARM（Apple Silicon）。
+# macOS-13 (Intel) runner 已逐步淘汰、排队极长，暂移除。
+# 如需 Intel 支持，可加回：- os: macos-13 / label: macos-intel
 on:
   workflow_dispatch:
   push:
@@ -16,8 +17,6 @@ jobs:
         include:
           - os: windows-latest
             label: windows-x64
-          - os: macos-13            # Intel
-            label: macos-intel
           - os: macos-14            # Apple Silicon
             label: macos-arm
     runs-on: ${{ matrix.os }}
