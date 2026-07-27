@@ -48,13 +48,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
-          mkdir -p desktop/output/wheels
-          cp dist/nanobot_ai-*.whl desktop/output/wheels/
+          # python -m build 输出到 dist/，直接用，不 cp 避免 glob 丢失
+          ls -la dist/nanobot_ai-*.whl
 
       # 把 wheel 装进 runner 的 python，让 onboard_server.py 能 import nanobot
       # （解耦：pake 构建抓页用的路由不依赖最终 bundle）
       - name: 安装 nanobot 到 runner python
-        run: python -m pip install desktop/output/wheels/nanobot_ai-*.whl
+        run: python -m pip install dist/nanobot_ai-*.whl
 
       # --- 3. 临时启动前端路由（pake 构建时抓取页面）----------------------
       - name: 启动前端路由
@@ -95,7 +95,8 @@ jobs:
           ./python.exe get-pip.py --no-warn-script-location
           Remove-Item get-pip.py
           $env:PYTHONNOUSERSITE = "1"
-          ./python.exe -m pip install --no-warn-script-location ../wheels/nanobot_ai-*.whl
+          # 从 repo 根目录的 dist/ 装 wheel（不再经过 wheels/ 中转）
+          ./python.exe -m pip install --no-warn-script-location (Resolve-Path ../../dist/nanobot_ai-*.whl)
           ./python.exe -c "import nanobot; print('ok', nanobot.__version__)"
           Pop-Location
 
@@ -115,7 +116,8 @@ jobs:
           tar -xzf py.tar.gz
           mv python-install python-bundle
           export PYTHONNOUSERSITE=1
-          ./python-bundle/bin/python3 -m pip install --no-warn-script-location wheels/nanobot_ai-*.whl
+          # 从 repo 根目录的 dist/ 装 wheel
+          ./python-bundle/bin/python3 -m pip install --no-warn-script-location ../../dist/nanobot_ai-*.whl
           ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)" || true
 
       # --- 6. Windows NSIS 安装包 ------------------------------------------
