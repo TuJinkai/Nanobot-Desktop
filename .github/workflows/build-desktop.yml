@@ -89,8 +89,6 @@ jobs:
         shell: bash
 
       # Pake 构建产物不在 working-directory，需要拷贝到 desktop/output/
-      # Windows: exe 在 pake-cli npm 包内部 target 目录
-      # macOS: .app 在 working-directory 或 pake-cli 内部目录
       - name: 拷贝 Pake 产物到输出目录
         shell: bash
         run: |
@@ -113,24 +111,50 @@ jobs:
               echo "已拷贝到 desktop/output/nanobot.exe ($(du -h desktop/output/nanobot.exe | cut -f1))"
             else
               echo "FAIL: 找不到 pake-nanobot.exe"
-              echo "尝试搜索常见位置:"
               for dir in "${SEARCH_DIRS[@]}"; do ls -la "$dir/src-tauri/target/" 2>/dev/null; done
               exit 1
             fi
           else
-            # macOS: .app 通常在 working-directory (desktop/output/) 下
-            APP=$(find desktop/output -name "*.app" -maxdepth 2 2>/dev/null | head -1)
+            # macOS: 先全面搜索 .app（pake-cli 可能输出到多个位置）
+            echo "-- 搜索范围 --"
+            echo "1. desktop/output/ (working-directory)"
+            echo "2. pake-cli 内部 target 目录"
+            echo "3. 全系统 mdfind (Spotlight)"
+
+            # 方法 1: working-directory
+            APP=$(find desktop/output -name "*.app" -maxdepth 3 2>/dev/null | head -1)
+
+            # 方法 2: pake-cli 内部（npm 全局路径可能在多处）
             if [ -z "$APP" ]; then
-              # 备用：pake-cli 内部目录
-              APP=$(find /usr/local/lib/node_modules/pake-cli -name "*.app" -maxdepth 6 2>/dev/null | head -1)
+              for base in /usr/local/lib/node_modules /Users/runner/.npm-global/lib/node_modules "$HOME/.npm-global/lib/node_modules" "$NVM_DIR/lib/node_modules"; do
+                found=$(find "$base/pake-cli" -name "*.app" -maxdepth 6 2>/dev/null | head -1)
+                if [ -n "$found" ]; then APP="$found"; break; fi
+              done
             fi
+
+            # 方法 3: Spotlight 全局搜索（macOS 特有，极快）
+            if [ -z "$APP" ]; then
+              APP=$(mdfind "kMDItemFSName == '*.app'" 2>/dev/null | grep -i pake | head -1)
+            fi
+
+            # 方法 4: 最后手段 — 在常见构建目录找
+            if [ -z "$APP" ]; then
+              for base in /tmp "$HOME" /Users/runner/work; do
+                found=$(find "$base" -name "pake-nanobot.app" -maxdepth 8 2>/dev/null | head -1)
+                if [ -n "$found" ]; then APP="$found"; break; fi
+              done
+            fi
+
             if [ -n "$APP" ]; then
               echo "找到: $APP"
               cp -R "$APP" desktop/output/
-              echo "已拷贝到 desktop/output/ $(basename "$APP")"
+              echo "已拷贝: $(basename "$APP") ($(du -sh "desktop/output/$(basename "$APP")" | cut -f1))"
             else
               echo "FAIL: 找不到 .app"
-              echo "desktop/output 内容:"; ls -la desktop/output/
+              echo "--- desktop/output 内容 ---"
+              ls -laR desktop/output/ 2>/dev/null | head -30
+              echo "--- 最近 5 分钟创建的 .app ---"
+              find / -name "*.app" -newer /tmp -maxdepth 6 2>/dev/null | grep -i pake | head -5
               exit 1
             fi
           fi
