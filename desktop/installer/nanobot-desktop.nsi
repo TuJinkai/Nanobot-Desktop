@@ -106,13 +106,13 @@ Section "nanobot Desktop" SecMain
     SetOutPath "$INSTDIR"
 
     ; --- Pake/Tauri desktop app (native WebView wrapper) ---
-    ; Windows 上 Pake 可能产出 .exe 或 .msi，根据实际文件处理
+    ; Windows 上 Pake 产出 .msi（或旧版 .exe），File 是编译时指令，用 /nonfatal
     DetailPrint "Installing Pake desktop app..."
-    ${If} ${FileExists} "${OUTPUT_DIR}\nanobot.exe"
-      File "${OUTPUT_DIR}\nanobot.exe"
-    ${ElseIf} ${FileExists} "${OUTPUT_DIR}\nanobot.msi"
-      File "${OUTPUT_DIR}\nanobot.msi"
-    ${Else}
+    File /nonfatal "${OUTPUT_DIR}\nanobot.exe"
+    File /nonfatal "${OUTPUT_DIR}\nanobot.msi"
+    ; 至少需要一个
+    ${IfNot} ${FileExists} "$INSTDIR\nanobot.exe"
+    ${AndIfNot} ${FileExists} "$INSTDIR\nanobot.msi"
       DetailPrint "ERROR: nanobot.exe/msi not found in ${OUTPUT_DIR}"
       Abort
     ${EndIf}
