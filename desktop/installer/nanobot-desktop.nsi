@@ -69,6 +69,14 @@ SetCompressor /SOLID lzma
 ; Install Section
 ; ----------------------------------------------------------------------
 Section "nanobot Desktop" SecMain
+    ; 安装/升级前清 WebView2 缓存，避免显示旧内容。
+    ; SetShellVarContext current → $LOCALAPPDATA 指向真实用户（而非提权后的 admin）profile。
+    SetShellVarContext current
+    DetailPrint "Clearing WebView2 cache..."
+    RMDir /r "$LOCALAPPDATA\com.nanobot.desktop\EBWebView"
+    ; 兼容旧版 hash 命名的 pake 缓存目录（早期 identifier 未固定时）
+    RMDir /r "$LOCALAPPDATA\com.pake.a58fcd1\EBWebView"
+
     SetOutPath "$INSTDIR"
 
     ; --- Assets (icons) ---
@@ -76,6 +84,7 @@ Section "nanobot Desktop" SecMain
     File "${ASSETS_DIR}\nanobot.ico"
     File "${ASSETS_DIR}\nanobot_icon.png"
     File "${ASSETS_DIR}\nanobot_logo.png"
+    File "${ASSETS_DIR}\nanobot_mark.svg"
     SetOutPath "$INSTDIR"
 
     ; --- Python runtime bundle ---

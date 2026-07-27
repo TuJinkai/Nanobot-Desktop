@@ -92,7 +92,7 @@ def build_wheel() -> bool:
     step("2/5 — 构建 nanobot wheel（避免在 bundle 内编译构建后端）")
     wheels = OUTPUT / "wheels"
     wheels.mkdir(parents=True, exist_ok=True)
-    if run([sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "-w", str(wheels)]) != 0:
+    if run([sys.executable, "-m", "pip", "wheel", ".", "--no-deps", "--no-cache-dir", "-w", str(wheels)]) != 0:
         return False
     found = list(wheels.glob("nanobot_ai-*.whl"))
     print(f"  OK: {found[0].name if found else '无 wheel!'}")

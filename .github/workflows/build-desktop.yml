@@ -72,6 +72,7 @@ jobs:
         run: |
           pake http://127.0.0.1:24691 \
             --name nanobot \
+            --identifier com.nanobot.desktop \
             --icon "$GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png" \
             --width 1100 --height 720 \
             --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js"
