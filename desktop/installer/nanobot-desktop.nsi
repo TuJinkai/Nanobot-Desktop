@@ -88,7 +88,10 @@ Section "nanobot Desktop" SecMain
     SetOutPath "$INSTDIR"
 
     ; --- Python runtime bundle ---
-    DetailPrint "Installing Python runtime + nanobot..."
+    ; 重要：先 RMDir 整个 python\ 再解压。否则旧版 dist-info 残留，
+    ; importlib.metadata 会同时看到 0.2.2 和 0.3.2 两个版本，返回旧号。
+    DetailPrint "Replacing Python runtime + nanobot..."
+    RMDir /r "$INSTDIR\python"
     SetOutPath "$INSTDIR\python"
     File /r /x "__pycache__" /x "*.pyc" /x "*.pyo" "${OUTPUT_DIR}\python-bundle\*"
     SetOutPath "$INSTDIR"
