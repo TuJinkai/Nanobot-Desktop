@@ -95,24 +95,39 @@ jobs:
           echo "=== 查找 Pake 构建产物 ==="
           if [ "$RUNNER_OS" = "Windows" ]; then
             # Windows: pake-nanobot.exe 在 pake-cli npm 包内部 target 目录
+            echo "=== 搜索 pake-nanobot.exe ==="
             SEARCH_DIRS=(
               "$APPDATA/npm/node_modules/pake-cli"
               "$USERPROFILE/AppData/Roaming/npm/node_modules/pake-cli"
               "/c/Users/runneradmin/AppData/Roaming/npm/node_modules/pake-cli"
+              "/d/a/_temp"
+              "$GITHUB_WORKSPACE"
             )
             EXE=""
             for dir in "${SEARCH_DIRS[@]}"; do
-              found=$(find "$dir" -name "pake-nanobot.exe" -maxdepth 6 2>/dev/null | head -1 || true)
+              found=$(find "$dir" -name "pake-nanobot.exe" -maxdepth 8 2>/dev/null | head -1 || true)
               if [ -n "$found" ]; then EXE="$found"; break; fi
             done
+
+            # Spotlight 等效：Windows 用 where 命令
+            if [ -z "$EXE" ]; then
+              EXE=$(where /r "C:\\Users" pake-nanobot.exe 2>/dev/null | head -1 || true)
+            fi
+
             if [ -n "$EXE" ]; then
               echo "找到: $EXE"
               cp "$EXE" desktop/output/nanobot.exe
               echo "已拷贝到 desktop/output/nanobot.exe ($(du -h desktop/output/nanobot.exe | cut -f1))"
             else
-              echo "FAIL: 找不到 pake-nanobot.exe"
-              for dir in "${SEARCH_DIRS[@]}"; do ls -la "$dir/src-tauri/target/" 2>/dev/null; done
-              exit 1
+              echo "找不到 pake-nanobot.exe，检查是否已有安装包..."
+              if ls desktop/output/nanobot-desktop-setup-*.exe 1>/dev/null 2>&1; then
+                echo "✓ 安装包已存在，跳过拷贝"
+              else
+                echo "FAIL: 找不到 pake-nanobot.exe 且无安装包"
+                echo "--- 搜索 pake-cli 目录 ---"
+                for dir in "${SEARCH_DIRS[@]}"; do ls -la "$dir" 2>/dev/null | head -5; done
+                exit 1
+              fi
             fi
           else
             # macOS: 先全面搜索 .app（pake-cli 可能输出到多个位置）
