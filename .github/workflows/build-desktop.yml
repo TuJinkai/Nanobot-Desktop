@@ -56,8 +56,12 @@ jobs:
 
       # 把 wheel 装进 runner 的 python，让 onboard_server.py 能 import nanobot
       # （解耦：pake 构建抓页用的路由不依赖最终 bundle）
+      # 用 Get-ChildItem 显式解析 glob，避免 PowerShell 不展开 *.whl 传给 pip
       - name: 安装 nanobot 到 runner python
-        run: python -m pip install dist/nanobot_ai-*.whl
+        run: |
+          $wheel = (Get-ChildItem dist/nanobot_ai-*.whl | Select-Object -First 1).FullName
+          python -m pip install $wheel
+        shell: pwsh
 
       # --- 3. 临时启动前端路由（pake 构建时抓取页面）----------------------
       - name: 启动前端路由
@@ -81,6 +85,53 @@ jobs:
             --width 1100 --height 720 \
             --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js"
         shell: bash
+
+      # Pake 构建产物不在 working-directory，需要拷贝到 desktop/output/
+      # Windows: exe 在 pake-cli npm 包内部 target 目录
+      # macOS: .app 在 working-directory 或 pake-cli 内部目录
+      - name: 拷贝 Pake 产物到输出目录
+        shell: bash
+        run: |
+          echo "=== 查找 Pake 构建产物 ==="
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Windows: pake-nanobot.exe 在 pake-cli npm 包内部 target 目录
+            SEARCH_DIRS=(
+              "$APPDATA/npm/node_modules/pake-cli"
+              "$USERPROFILE/AppData/Roaming/npm/node_modules/pake-cli"
+              "/c/Users/runneradmin/AppData/Roaming/npm/node_modules/pake-cli"
+            )
+            EXE=""
+            for dir in "${SEARCH_DIRS[@]}"; do
+              found=$(find "$dir" -name "pake-nanobot.exe" -maxdepth 6 2>/dev/null | head -1)
+              if [ -n "$found" ]; then EXE="$found"; break; fi
+            done
+            if [ -n "$EXE" ]; then
+              echo "找到: $EXE"
+              cp "$EXE" desktop/output/nanobot.exe
+              echo "已拷贝到 desktop/output/nanobot.exe ($(du -h desktop/output/nanobot.exe | cut -f1))"
+            else
+              echo "FAIL: 找不到 pake-nanobot.exe"
+              echo "尝试搜索常见位置:"
+              for dir in "${SEARCH_DIRS[@]}"; do ls -la "$dir/src-tauri/target/" 2>/dev/null; done
+              exit 1
+            fi
+          else
+            # macOS: .app 通常在 working-directory (desktop/output/) 下
+            APP=$(find desktop/output -name "*.app" -maxdepth 2 2>/dev/null | head -1)
+            if [ -z "$APP" ]; then
+              # 备用：pake-cli 内部目录
+              APP=$(find /usr/local/lib/node_modules/pake-cli -name "*.app" -maxdepth 6 2>/dev/null | head -1)
+            fi
+            if [ -n "$APP" ]; then
+              echo "找到: $APP"
+              cp -R "$APP" desktop/output/
+              echo "已拷贝到 desktop/output/ $(basename "$APP")"
+            else
+              echo "FAIL: 找不到 .app"
+              echo "desktop/output 内容:"; ls -la desktop/output/
+              exit 1
+            fi
+          fi
 
       # --- 5. Python 后端 bundle（Windows embeddable；macOS best-effort）--
       - name: Python bundle (Windows, embeddable)
