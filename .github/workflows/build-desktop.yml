@@ -36,6 +36,10 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
 
+      # 确保 desktop/output 存在（Pake 构建需要该目录作为 working-directory）
+      - name: 创建输出目录
+        run: mkdir -p desktop/output
+
       # --- 1. WebUI --------------------------------------------------------
       - name: 构建 WebUI
         working-directory: webui
@@ -48,7 +52,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
-          # python -m build 输出到 dist/，直接用，不 cp 避免 glob 丢失
           ls -la dist/nanobot_ai-*.whl
 
       # 把 wheel 装进 runner 的 python，让 onboard_server.py 能 import nanobot
@@ -59,7 +62,7 @@ jobs:
       # --- 3. 临时启动前端路由（pake 构建时抓取页面）----------------------
       - name: 启动前端路由
         run: |
-          python desktop/backend/onboard_server.py >/tmp/router.log 2>&1 &
+          python desktop/backend/onboard_server.py > /tmp/router.log 2>&1 &
           sleep 3
           curl -s http://127.0.0.1:24691/api/status || true
         shell: bash
@@ -85,18 +88,18 @@ jobs:
         working-directory: desktop/output
         shell: pwsh
         run: |
-          curl -L -o python-embed.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile python-embed.zip
           if (Test-Path python-bundle) { Remove-Item -Recurse -Force python-bundle }
           New-Item -ItemType Directory python-bundle | Out-Null
           Push-Location python-bundle
-          unzip -q ../python-embed.zip
+          Expand-Archive -Path ../python-embed.zip -DestinationPath . -Force
           Set-Content python312._pth "python312.zip`n.`nLib\site-packages`n`nimport site`n"
-          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
           ./python.exe get-pip.py --no-warn-script-location
           Remove-Item get-pip.py
           $env:PYTHONNOUSERSITE = "1"
-          # 从 repo 根目录的 dist/ 装 wheel（不再经过 wheels/ 中转）
-          ./python.exe -m pip install --no-warn-script-location (Resolve-Path ../../dist/nanobot_ai-*.whl)
+          $wheel = (Resolve-Path ../../dist/nanobot_ai-*.whl).Path
+          ./python.exe -m pip install --no-warn-script-location $wheel
           ./python.exe -c "import nanobot; print('ok', nanobot.__version__)"
           Pop-Location
 
@@ -108,15 +111,13 @@ jobs:
           set -x
           ARCH="$(uname -m)"
           if [ "$ARCH" = "arm64" ]; then TRIPLE="aarch64-apple-darwin"; else TRIPLE="x86_64-apple-darwin"; fi
-          # 动态取 python-build-standalone 最新 release 里匹配 3.12 的资产
           ASSET=$(curl -fsSL https://api.github.com/repos/indygreg/python-build-standalone/releases/latest \
             | python -c "import sys,json; r=json.load(sys.stdin); t='$TRIPLE'; print(next((a['browser_download_url'] for a in r['assets'] if 'cpython-3.12' in a['name'] and t in a['name'] and 'pgo+lto-full' in a['name'] and a['name'].endswith('.tar.gz')),''))" || true)
-          if [ -z "$ASSET" ]; then echo "未找到 standalone python，跳过 mac bundle（不影响 .dmg）"; exit 0; fi
+          if [ -z "$ASSET" ]; then echo "未找到 standalone python，跳过 mac bundle"; exit 0; fi
           curl -L -o py.tar.gz "$ASSET"
           tar -xzf py.tar.gz
           mv python-install python-bundle
           export PYTHONNOUSERSITE=1
-          # 从 repo 根目录的 dist/ 装 wheel
           ./python-bundle/bin/python3 -m pip install --no-warn-script-location ../../dist/nanobot_ai-*.whl
           ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)" || true
 
@@ -126,11 +127,9 @@ jobs:
         working-directory: desktop/output
         shell: bash
         run: |
-          # Pake 产出 .app 目录，用 hdiutil 打成 .dmg 方便分发
           APP=$(ls -d *.app 2>/dev/null | head -1)
-          if [ -z "$APP" ]; then echo "FAIL: 找不到 .app"; exit 1; fi
+          if [ -z "$APP" ]; then echo "FAIL: 找不到 .app"; ls -la; exit 1; fi
           echo "找到 $APP，打包为 nanobot.dmg..."
-          # 清理旧的（如果存在）
           rm -f nanobot.dmg
           hdiutil create -volname "nanobot" \
             -srcfolder "$APP" \
@@ -142,22 +141,24 @@ jobs:
       - name: 编译 NSIS 安装包 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MSYS_NO_PATHCONV: 1
         run: |
           $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $nsis)) { choco install nsis -y; $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
           & $nsis `
-            /DOUTPUT_DIR=desktop/output `
-            /DASSETS_DIR=desktop/assets `
-            /DBACKEND_DIR=desktop/backend `
-            /DLICENSE_PATH=LICENSE `
-            desktop/installer/nanobot-desktop.nsi
+            "/DOUTPUT_DIR=$env:GITHUB_WORKSPACE\desktop\output" `
+            "/DASSETS_DIR=$env:GITHUB_WORKSPACE\desktop\assets" `
+            "/DBACKEND_DIR=$env:GITHUB_WORKSPACE\desktop\backend" `
+            "/DLICENSE_PATH=$env:GITHUB_WORKSPACE\LICENSE" `
+            "$env:GITHUB_WORKSPACE\desktop\installer\nanobot-desktop.nsi"
 
-      # --- 7. 上传产物 -----------------------------------------------------
+      # --- 8. 上传产物 -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: nanobot-desktop-windows-x64
-          path: desktop/output/nanobot-desktop-setup.exe
+          path: desktop/output/nanobot-desktop-setup-*.exe
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
