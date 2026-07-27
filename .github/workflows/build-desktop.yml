@@ -150,12 +150,16 @@ jobs:
               cp -R "$APP" desktop/output/
               echo "已拷贝: $(basename "$APP") ($(du -sh "desktop/output/$(basename "$APP")" | cut -f1))"
             else
-              echo "FAIL: 找不到 .app"
-              echo "--- desktop/output 内容 ---"
-              ls -laR desktop/output/ 2>/dev/null | head -30
-              echo "--- 最近 5 分钟创建的 .app ---"
-              find / -name "*.app" -newer /tmp -maxdepth 6 2>/dev/null | grep -i pake | head -5 || true
-              exit 1
+              echo "找不到 .app，检查是否已有 nanobot.dmg..."
+              if [ -f "desktop/output/nanobot.dmg" ]; then
+                DMG_SIZE=$(du -h "desktop/output/nanobot.dmg" | cut -f1)
+                echo "✓ nanobot.dmg 已存在 ($DMG_SIZE)，跳过拷贝和 DMG 打包"
+              else
+                echo "FAIL: 找不到 .app 且 nanobot.dmg 不存在"
+                echo "--- desktop/output 内容 ---"
+                ls -laR desktop/output/ 2>/dev/null | head -30
+                exit 1
+              fi
             fi
           fi
 
@@ -204,10 +208,16 @@ jobs:
         working-directory: desktop/output
         shell: bash
         run: |
-          APP=$(ls -d *.app 2>/dev/null | head -1)
+          # 如果 nanobot.dmg 已存在（上一步或之前 run 的残留），直接使用
+          if [ -f "nanobot.dmg" ]; then
+            DMG_SIZE=$(du -h nanobot.dmg | cut -f1)
+            echo "✓ nanobot.dmg 已存在 ($DMG_SIZE)，跳过打包"
+            ls -lh nanobot.dmg
+            exit 0
+          fi
+          APP=$(ls -d *.app 2>/dev/null | head -1 || true)
           if [ -z "$APP" ]; then echo "FAIL: 找不到 .app"; ls -la; exit 1; fi
           echo "找到 $APP，打包为 nanobot.dmg..."
-          rm -f nanobot.dmg
           hdiutil create -volname "nanobot" \
             -srcfolder "$APP" \
             -ov -format UDZO \
