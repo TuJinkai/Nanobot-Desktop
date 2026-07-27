@@ -38,6 +38,7 @@ jobs:
 
       # 确保 desktop/output 存在（Pake 构建需要该目录作为 working-directory）
       - name: 创建输出目录
+        shell: bash
         run: mkdir -p desktop/output
 
       # --- 1. WebUI --------------------------------------------------------
@@ -49,6 +50,7 @@ jobs:
 
       # --- 2. nanobot wheel（构建一次，bundle 和路由都用它）---------------
       - name: 构建 nanobot wheel
+        shell: bash
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
