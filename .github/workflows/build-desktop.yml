@@ -102,7 +102,7 @@ jobs:
             )
             EXE=""
             for dir in "${SEARCH_DIRS[@]}"; do
-              found=$(find "$dir" -name "pake-nanobot.exe" -maxdepth 6 2>/dev/null | head -1)
+              found=$(find "$dir" -name "pake-nanobot.exe" -maxdepth 6 2>/dev/null | head -1 || true)
               if [ -n "$found" ]; then EXE="$found"; break; fi
             done
             if [ -n "$EXE" ]; then
@@ -121,26 +121,26 @@ jobs:
             echo "2. pake-cli 内部 target 目录"
             echo "3. 全系统 mdfind (Spotlight)"
 
-            # 方法 1: working-directory
-            APP=$(find desktop/output -name "*.app" -maxdepth 3 2>/dev/null | head -1)
+            # 方法 1: working-directory（|| true 防止 find 返回非零导致 set -e 退出）
+            APP=$(find desktop/output -name "*.app" -maxdepth 3 2>/dev/null | head -1 || true)
 
             # 方法 2: pake-cli 内部（npm 全局路径可能在多处）
             if [ -z "$APP" ]; then
               for base in /usr/local/lib/node_modules /Users/runner/.npm-global/lib/node_modules "$HOME/.npm-global/lib/node_modules" "$NVM_DIR/lib/node_modules"; do
-                found=$(find "$base/pake-cli" -name "*.app" -maxdepth 6 2>/dev/null | head -1)
+                found=$(find "$base/pake-cli" -name "*.app" -maxdepth 6 2>/dev/null | head -1 || true)
                 if [ -n "$found" ]; then APP="$found"; break; fi
               done
             fi
 
             # 方法 3: Spotlight 全局搜索（macOS 特有，极快）
             if [ -z "$APP" ]; then
-              APP=$(mdfind "kMDItemFSName == '*.app'" 2>/dev/null | grep -i pake | head -1)
+              APP=$(mdfind "kMDItemFSName == '*.app'" 2>/dev/null | grep -i pake | head -1 || true)
             fi
 
             # 方法 4: 最后手段 — 在常见构建目录找
             if [ -z "$APP" ]; then
               for base in /tmp "$HOME" /Users/runner/work; do
-                found=$(find "$base" -name "pake-nanobot.app" -maxdepth 8 2>/dev/null | head -1)
+                found=$(find "$base" -name "pake-nanobot.app" -maxdepth 8 2>/dev/null | head -1 || true)
                 if [ -n "$found" ]; then APP="$found"; break; fi
               done
             fi
@@ -154,7 +154,7 @@ jobs:
               echo "--- desktop/output 内容 ---"
               ls -laR desktop/output/ 2>/dev/null | head -30
               echo "--- 最近 5 分钟创建的 .app ---"
-              find / -name "*.app" -newer /tmp -maxdepth 6 2>/dev/null | grep -i pake | head -5
+              find / -name "*.app" -newer /tmp -maxdepth 6 2>/dev/null | grep -i pake | head -5 || true
               exit 1
             fi
           fi
