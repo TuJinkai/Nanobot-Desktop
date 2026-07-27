@@ -120,7 +120,25 @@ jobs:
           ./python-bundle/bin/python3 -m pip install --no-warn-script-location ../../dist/nanobot_ai-*.whl
           ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)" || true
 
-      # --- 6. Windows NSIS 安装包 ------------------------------------------
+      # --- 6. macOS DMG 打包 -----------------------------------------------
+      - name: 打包 DMG (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop/output
+        shell: bash
+        run: |
+          # Pake 产出 .app 目录，用 hdiutil 打成 .dmg 方便分发
+          APP=$(ls -d *.app 2>/dev/null | head -1)
+          if [ -z "$APP" ]; then echo "FAIL: 找不到 .app"; exit 1; fi
+          echo "找到 $APP，打包为 nanobot.dmg..."
+          # 清理旧的（如果存在）
+          rm -f nanobot.dmg
+          hdiutil create -volname "nanobot" \
+            -srcfolder "$APP" \
+            -ov -format UDZO \
+            nanobot.dmg
+          ls -lh nanobot.dmg
+
+      # --- 7. Windows NSIS 安装包 ------------------------------------------
       - name: 编译 NSIS 安装包 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
@@ -145,7 +163,4 @@ jobs:
         if: runner.os == 'macOS'
         with:
           name: nanobot-desktop-${{ matrix.label }}
-          path: |
-            desktop/output/*.dmg
-            desktop/output/*.app
-          if-no-files-found: warn
+          path: desktop/output/nanobot.dmg
