@@ -2,6 +2,7 @@ name: build-desktop
 
 # 构建 nanobot Desktop：Windows x64 + macOS (Intel + ARM)。
 # macOS 包无法在 Windows 交叉构建（需 macOS SDK+Xcode），故用对应平台 runner。
+# macOS-13 已于 2025-12 退役，Intel 改用 macos-15-intel。
 on:
   workflow_dispatch:
   push:
@@ -16,9 +17,9 @@ jobs:
         include:
           - os: windows-latest
             label: windows-x64
-          - os: macos-13            # Intel
+          - os: macos-15-intel    # Intel (x86_64)
             label: macos-intel
-          - os: macos-14            # Apple Silicon
+          - os: macos-15          # Apple Silicon (arm64)
             label: macos-arm
     runs-on: ${{ matrix.os }}
     steps:
@@ -35,6 +36,11 @@ jobs:
       - uses: actions/setup-python@v5
         with: { python-version: "3.12" }
 
+      # 确保 desktop/output 存在（Pake 构建需要该目录作为 working-directory）
+      - name: 创建输出目录
+        shell: bash
+        run: mkdir -p desktop/output
+
       # --- 1. WebUI --------------------------------------------------------
       - name: 构建 WebUI
         working-directory: webui
@@ -44,21 +50,25 @@ jobs:
 
       # --- 2. nanobot wheel（构建一次，bundle 和路由都用它）---------------
       - name: 构建 nanobot wheel
+        shell: bash
         run: |
           python -m pip install --upgrade pip build
           python -m build --wheel
-          mkdir -p desktop/output/wheels
-          cp dist/nanobot_ai-*.whl desktop/output/wheels/
+          ls -la dist/nanobot_ai-*.whl
 
       # 把 wheel 装进 runner 的 python，让 onboard_server.py 能 import nanobot
       # （解耦：pake 构建抓页用的路由不依赖最终 bundle）
+      # 用 Get-ChildItem 显式解析 glob，避免 PowerShell 不展开 *.whl 传给 pip
       - name: 安装 nanobot 到 runner python
-        run: python -m pip install desktop/output/wheels/nanobot_ai-*.whl
+        run: |
+          $wheel = (Get-ChildItem dist/nanobot_ai-*.whl | Select-Object -First 1).FullName
+          python -m pip install $wheel
+        shell: pwsh
 
       # --- 3. 临时启动前端路由（pake 构建时抓取页面）----------------------
       - name: 启动前端路由
         run: |
-          python desktop/backend/onboard_server.py >/tmp/router.log 2>&1 &
+          python desktop/backend/onboard_server.py > /tmp/router.log 2>&1 &
           sleep 3
           curl -s http://127.0.0.1:24691/api/status || true
         shell: bash
@@ -72,10 +82,93 @@ jobs:
         run: |
           pake http://127.0.0.1:24691 \
             --name nanobot \
+            --identifier com.nanobot.desktop \
             --icon "$GITHUB_WORKSPACE/desktop/assets/nanobot_icon.png" \
             --width 1100 --height 720 \
             --inject "$GITHUB_WORKSPACE/desktop/assets/inject-locale.js"
         shell: bash
+
+      # Pake 构建产物不在 working-directory，需要拷贝到 desktop/output/
+      - name: 拷贝 Pake 产物到输出目录
+        shell: bash
+        run: |
+          echo "=== 查找 Pake 构建产物 ==="
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            # Windows: Pake 直接把产物拷贝到 working-directory (desktop/output/)
+            echo "=== 检查 Pake Windows 产物 ==="
+            if [ -f "desktop/output/nanobot.msi" ]; then
+              echo "✓ nanobot.msi 已存在 ($(du -h desktop/output/nanobot.msi | cut -f1))"
+            elif [ -f "desktop/output/nanobot.exe" ]; then
+              echo "✓ nanobot.exe 已存在 ($(du -h desktop/output/nanobot.exe | cut -f1))"
+            else
+              echo "找不到 Pake 产物，搜索备选位置..."
+              SEARCH_DIRS=(
+                "$APPDATA/npm/node_modules/pake-cli"
+                "$USERPROFILE/AppData/Roaming/npm/node_modules/pake-cli"
+                "/c/npm/node_modules/pake-cli"
+              )
+              MSI=""
+              for dir in "${SEARCH_DIRS[@]}"; do
+                found=$(find "$dir" -name "nanobot_*.msi" -maxdepth 8 2>/dev/null | head -1 || true)
+                if [ -n "$found" ]; then MSI="$found"; break; fi
+              done
+              if [ -n "$MSI" ]; then
+                cp "$MSI" desktop/output/nanobot.msi
+                echo "已拷贝 MSI: $(du -h desktop/output/nanobot.msi | cut -f1)"
+              else
+                echo "FAIL: 找不到 Pake 产物"
+                ls -la desktop/output/ 2>/dev/null
+                exit 1
+              fi
+            fi
+          else
+            # macOS: 先全面搜索 .app（pake-cli 可能输出到多个位置）
+            echo "-- 搜索范围 --"
+            echo "1. desktop/output/ (working-directory)"
+            echo "2. pake-cli 内部 target 目录"
+            echo "3. 全系统 mdfind (Spotlight)"
+
+            # 方法 1: working-directory（|| true 防止 find 返回非零导致 set -e 退出）
+            APP=$(find desktop/output -name "*.app" -maxdepth 3 2>/dev/null | head -1 || true)
+
+            # 方法 2: pake-cli 内部（npm 全局路径可能在多处）
+            if [ -z "$APP" ]; then
+              for base in /usr/local/lib/node_modules /Users/runner/.npm-global/lib/node_modules "$HOME/.npm-global/lib/node_modules" "$NVM_DIR/lib/node_modules"; do
+                found=$(find "$base/pake-cli" -name "*.app" -maxdepth 6 2>/dev/null | head -1 || true)
+                if [ -n "$found" ]; then APP="$found"; break; fi
+              done
+            fi
+
+            # 方法 3: Spotlight 全局搜索（macOS 特有，极快）
+            if [ -z "$APP" ]; then
+              APP=$(mdfind "kMDItemFSName == '*.app'" 2>/dev/null | grep -i pake | head -1 || true)
+            fi
+
+            # 方法 4: 最后手段 — 在常见构建目录找
+            if [ -z "$APP" ]; then
+              for base in /tmp "$HOME" /Users/runner/work; do
+                found=$(find "$base" -name "pake-nanobot.app" -maxdepth 8 2>/dev/null | head -1 || true)
+                if [ -n "$found" ]; then APP="$found"; break; fi
+              done
+            fi
+
+            if [ -n "$APP" ]; then
+              echo "找到: $APP"
+              cp -R "$APP" desktop/output/
+              echo "已拷贝: $(basename "$APP") ($(du -sh "desktop/output/$(basename "$APP")" | cut -f1))"
+            else
+              echo "找不到 .app，检查是否已有 nanobot.dmg..."
+              if [ -f "desktop/output/nanobot.dmg" ]; then
+                DMG_SIZE=$(du -h "desktop/output/nanobot.dmg" | cut -f1)
+                echo "✓ nanobot.dmg 已存在 ($DMG_SIZE)，跳过拷贝和 DMG 打包"
+              else
+                echo "FAIL: 找不到 .app 且 nanobot.dmg 不存在"
+                echo "--- desktop/output 内容 ---"
+                ls -laR desktop/output/ 2>/dev/null | head -30
+                exit 1
+              fi
+            fi
+          fi
 
       # --- 5. Python 后端 bundle（Windows embeddable；macOS best-effort）--
       - name: Python bundle (Windows, embeddable)
@@ -83,17 +176,19 @@ jobs:
         working-directory: desktop/output
         shell: pwsh
         run: |
-          curl -L -o python-embed.zip https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip
+          Invoke-WebRequest -Uri "https://www.python.org/ftp/python/3.12.10/python-3.12.10-embed-amd64.zip" -OutFile python-embed.zip
           if (Test-Path python-bundle) { Remove-Item -Recurse -Force python-bundle }
           New-Item -ItemType Directory python-bundle | Out-Null
           Push-Location python-bundle
-          unzip -q ../python-embed.zip
+          Expand-Archive -Path ../python-embed.zip -DestinationPath . -Force
           Set-Content python312._pth "python312.zip`n.`nLib\site-packages`n`nimport site`n"
-          curl -L -o get-pip.py https://bootstrap.pypa.io/get-pip.py
+          Invoke-WebRequest -Uri "https://bootstrap.pypa.io/get-pip.py" -OutFile get-pip.py
           ./python.exe get-pip.py --no-warn-script-location
           Remove-Item get-pip.py
           $env:PYTHONNOUSERSITE = "1"
-          ./python.exe -m pip install --no-warn-script-location ../wheels/nanobot_ai-*.whl
+          # 直接用 GITHUB_WORKSPACE 绝对路径，避免 ../../dist/ 解析错误
+          $wheel = (Get-ChildItem "$env:GITHUB_WORKSPACE\dist\nanobot_ai-*.whl" | Select-Object -First 1).FullName
+          ./python.exe -m pip install --no-warn-script-location $wheel
           ./python.exe -c "import nanobot; print('ok', nanobot.__version__)"
           Pop-Location
 
@@ -105,43 +200,64 @@ jobs:
           set -x
           ARCH="$(uname -m)"
           if [ "$ARCH" = "arm64" ]; then TRIPLE="aarch64-apple-darwin"; else TRIPLE="x86_64-apple-darwin"; fi
-          # 动态取 python-build-standalone 最新 release 里匹配 3.12 的资产
           ASSET=$(curl -fsSL https://api.github.com/repos/indygreg/python-build-standalone/releases/latest \
             | python -c "import sys,json; r=json.load(sys.stdin); t='$TRIPLE'; print(next((a['browser_download_url'] for a in r['assets'] if 'cpython-3.12' in a['name'] and t in a['name'] and 'pgo+lto-full' in a['name'] and a['name'].endswith('.tar.gz')),''))" || true)
-          if [ -z "$ASSET" ]; then echo "未找到 standalone python，跳过 mac bundle（不影响 .dmg）"; exit 0; fi
+          if [ -z "$ASSET" ]; then echo "未找到 standalone python，跳过 mac bundle"; exit 0; fi
           curl -L -o py.tar.gz "$ASSET"
           tar -xzf py.tar.gz
           mv python-install python-bundle
           export PYTHONNOUSERSITE=1
-          ./python-bundle/bin/python3 -m pip install --no-warn-script-location wheels/nanobot_ai-*.whl
+          # 用 GITHUB_WORKSPACE 绝对路径
+          ./python-bundle/bin/python3 -m pip install --no-warn-script-location "$GITHUB_WORKSPACE/dist/nanobot_ai-*.whl"
           ./python-bundle/bin/python3 -c "import nanobot; print('ok', nanobot.__version__)" || true
 
-      # --- 6. Windows NSIS 安装包 ------------------------------------------
+      # --- 6. macOS DMG 打包 -----------------------------------------------
+      - name: 打包 DMG (macOS)
+        if: runner.os == 'macOS'
+        working-directory: desktop/output
+        shell: bash
+        run: |
+          # 如果 nanobot.dmg 已存在（上一步或之前 run 的残留），直接使用
+          if [ -f "nanobot.dmg" ]; then
+            DMG_SIZE=$(du -h nanobot.dmg | cut -f1)
+            echo "✓ nanobot.dmg 已存在 ($DMG_SIZE)，跳过打包"
+            ls -lh nanobot.dmg
+            exit 0
+          fi
+          APP=$(ls -d *.app 2>/dev/null | head -1 || true)
+          if [ -z "$APP" ]; then echo "FAIL: 找不到 .app"; ls -la; exit 1; fi
+          echo "找到 $APP，打包为 nanobot.dmg..."
+          hdiutil create -volname "nanobot" \
+            -srcfolder "$APP" \
+            -ov -format UDZO \
+            nanobot.dmg
+          ls -lh nanobot.dmg
+
+      # --- 7. Windows NSIS 安装包 ------------------------------------------
       - name: 编译 NSIS 安装包 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
+        env:
+          MSYS_NO_PATHCONV: 1
         run: |
           $nsis = "C:\Program Files (x86)\NSIS\makensis.exe"
           if (-not (Test-Path $nsis)) { choco install nsis -y; $nsis = "C:\Program Files (x86)\NSIS\makensis.exe" }
           & $nsis `
-            /DOUTPUT_DIR=desktop/output `
-            /DASSETS_DIR=desktop/assets `
-            /DBACKEND_DIR=desktop/backend `
-            /DLICENSE_PATH=LICENSE `
-            desktop/installer/nanobot-desktop.nsi
+            "/DOUTPUT_DIR=$env:GITHUB_WORKSPACE\desktop\output" `
+            "/DASSETS_DIR=$env:GITHUB_WORKSPACE\desktop\assets" `
+            "/DBACKEND_DIR=$env:GITHUB_WORKSPACE\desktop\backend" `
+            "/DLICENSE_PATH=$env:GITHUB_WORKSPACE\LICENSE" `
+            "$env:GITHUB_WORKSPACE\desktop\installer\nanobot-desktop.nsi"
 
-      # --- 7. 上传产物 -----------------------------------------------------
+      # --- 8. 上传产物 -----------------------------------------------------
       - uses: actions/upload-artifact@v4
         if: runner.os == 'Windows'
         with:
           name: nanobot-desktop-windows-x64
-          path: desktop/output/nanobot-desktop-setup.exe
+          path: desktop/output/nanobot-desktop-setup-*.exe
 
       - uses: actions/upload-artifact@v4
         if: runner.os == 'macOS'
         with:
           name: nanobot-desktop-${{ matrix.label }}
-          path: |
-            desktop/output/*.dmg
-            desktop/output/*.app
-          if-no-files-found: warn
+          path: desktop/output/nanobot.dmg

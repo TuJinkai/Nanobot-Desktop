@@ -33,7 +33,7 @@ Unicode true
 ; ----------------------------------------------------------------------
 !define PRODUCT_NAME "算小智nanobot Desktop"
 !define PRODUCT_PUBLISHER "nanobot"
-!define PRODUCT_VERSION "0.2.2-logo"
+!define PRODUCT_VERSION "0.3.0-logo"
 !define PRODUCT_WEB_SITE "https://github.com/HKUDS/nanobot"
 !define PRODUCT_DIR_REGKEY "Software\Microsoft\Windows\CurrentVersion\App Paths\nanobot-desktop.exe"
 
@@ -69,6 +69,14 @@ SetCompressor /SOLID lzma
 ; Install Section
 ; ----------------------------------------------------------------------
 Section "nanobot Desktop" SecMain
+    ; 安装/升级前清 WebView2 缓存，避免显示旧内容。
+    ; SetShellVarContext current → $LOCALAPPDATA 指向真实用户（而非提权后的 admin）profile。
+    SetShellVarContext current
+    DetailPrint "Clearing WebView2 cache..."
+    RMDir /r "$LOCALAPPDATA\com.nanobot.desktop\EBWebView"
+    ; 兼容旧版 hash 命名的 pake 缓存目录（早期 identifier 未固定时）
+    RMDir /r "$LOCALAPPDATA\com.pake.a58fcd1\EBWebView"
+
     SetOutPath "$INSTDIR"
 
     ; --- Assets (icons) ---
@@ -76,10 +84,14 @@ Section "nanobot Desktop" SecMain
     File "${ASSETS_DIR}\nanobot.ico"
     File "${ASSETS_DIR}\nanobot_icon.png"
     File "${ASSETS_DIR}\nanobot_logo.png"
+    File "${ASSETS_DIR}\nanobot_mark.svg"
     SetOutPath "$INSTDIR"
 
     ; --- Python runtime bundle ---
-    DetailPrint "Installing Python runtime + nanobot..."
+    ; 重要：先 RMDir 整个 python\ 再解压。否则旧版 dist-info 残留，
+    ; importlib.metadata 会同时看到 0.2.2 和 0.3.2 两个版本，返回旧号。
+    DetailPrint "Replacing Python runtime + nanobot..."
+    RMDir /r "$INSTDIR\python"
     SetOutPath "$INSTDIR\python"
     File /r /x "__pycache__" /x "*.pyc" /x "*.pyo" "${OUTPUT_DIR}\python-bundle\*"
     SetOutPath "$INSTDIR"
@@ -94,8 +106,16 @@ Section "nanobot Desktop" SecMain
     SetOutPath "$INSTDIR"
 
     ; --- Pake/Tauri desktop app (native WebView wrapper) ---
+    ; Windows 上 Pake 产出 .msi（或旧版 .exe），File 是编译时指令，用 /nonfatal
     DetailPrint "Installing Pake desktop app..."
-    File "${OUTPUT_DIR}\nanobot.exe"
+    File /nonfatal "${OUTPUT_DIR}\nanobot.exe"
+    File /nonfatal "${OUTPUT_DIR}\nanobot.msi"
+    ; 至少需要一个
+    ${IfNot} ${FileExists} "$INSTDIR\nanobot.exe"
+    ${AndIfNot} ${FileExists} "$INSTDIR\nanobot.msi"
+      DetailPrint "ERROR: nanobot.exe/msi not found in ${OUTPUT_DIR}"
+      Abort
+    ${EndIf}
     SetOutPath "$INSTDIR"
 
     ; --- Create shortcuts ---
@@ -165,6 +185,7 @@ Section "Uninstall"
     RMDir /r "$INSTDIR\backend"
     RMDir /r "$INSTDIR\assets"
     Delete "$INSTDIR\nanobot.exe"
+    Delete "$INSTDIR\nanobot.msi"
     Delete "$INSTDIR\uninst.exe"
     RMDir "$INSTDIR"
 

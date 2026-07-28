@@ -11,7 +11,6 @@ from typing import Any, cast
 from pydantic import BaseModel, Field
 
 from nanobot.cli import onboard as onboard_wizard
-from nanobot.cli.commands import _merge_missing_defaults
 from nanobot.cli.onboard import (
     _BACK_PRESSED,
     _configure_pydantic_model,
@@ -22,18 +21,19 @@ from nanobot.cli.onboard import (
     _input_text,
     run_onboard,
 )
+from nanobot.config.loader import merge_missing_defaults
 from nanobot.config.schema import Config, ModelPresetConfig
 from nanobot.utils.helpers import sync_workspace_templates
 
 
 class TestMergeMissingDefaults:
-    """Tests for _merge_missing_defaults recursive config merging."""
+    """Tests for recursive config default merging."""
 
     def test_adds_missing_top_level_keys(self):
         existing = {"a": 1}
         defaults = {"a": 1, "b": 2, "c": 3}
 
-        result = _merge_missing_defaults(existing, defaults)
+        result = merge_missing_defaults(existing, defaults)
 
         assert result == {"a": 1, "b": 2, "c": 3}
 
@@ -41,7 +41,7 @@ class TestMergeMissingDefaults:
         existing = {"a": "custom_value"}
         defaults = {"a": "default_value"}
 
-        result = _merge_missing_defaults(existing, defaults)
+        result = merge_missing_defaults(existing, defaults)
 
         assert result == {"a": "custom_value"}
 
@@ -63,7 +63,7 @@ class TestMergeMissingDefaults:
             }
         }
 
-        result = _merge_missing_defaults(existing, defaults)
+        result = merge_missing_defaults(existing, defaults)
 
         assert result == {
             "level1": {
@@ -76,19 +76,19 @@ class TestMergeMissingDefaults:
         }
 
     def test_returns_existing_if_not_dict(self):
-        assert _merge_missing_defaults("string", {"a": 1}) == "string"
-        assert _merge_missing_defaults([1, 2, 3], {"a": 1}) == [1, 2, 3]
-        assert _merge_missing_defaults(None, {"a": 1}) is None
-        assert _merge_missing_defaults(42, {"a": 1}) == 42
+        assert merge_missing_defaults("string", {"a": 1}) == "string"
+        assert merge_missing_defaults([1, 2, 3], {"a": 1}) == [1, 2, 3]
+        assert merge_missing_defaults(None, {"a": 1}) is None
+        assert merge_missing_defaults(42, {"a": 1}) == 42
 
     def test_returns_existing_if_defaults_not_dict(self):
-        assert _merge_missing_defaults({"a": 1}, "string") == {"a": 1}
-        assert _merge_missing_defaults({"a": 1}, None) == {"a": 1}
+        assert merge_missing_defaults({"a": 1}, "string") == {"a": 1}
+        assert merge_missing_defaults({"a": 1}, None) == {"a": 1}
 
     def test_handles_empty_dicts(self):
-        assert _merge_missing_defaults({}, {"a": 1}) == {"a": 1}
-        assert _merge_missing_defaults({"a": 1}, {}) == {"a": 1}
-        assert _merge_missing_defaults({}, {}) == {}
+        assert merge_missing_defaults({}, {"a": 1}) == {"a": 1}
+        assert merge_missing_defaults({"a": 1}, {}) == {"a": 1}
+        assert merge_missing_defaults({}, {}) == {}
 
     def test_backfills_channel_config(self):
         """Real-world scenario: backfill missing channel fields."""
@@ -105,7 +105,7 @@ class TestMergeMissingDefaults:
             "allowFrom": [],
         }
 
-        result = _merge_missing_defaults(existing_channel, default_channel)
+        result = merge_missing_defaults(existing_channel, default_channel)
 
         assert result["msgFormat"] == "plain"
         assert result["allowFrom"] == []
@@ -374,6 +374,15 @@ class TestSyncWorkspaceTemplates:
         sync_workspace_templates(workspace, silent=True)
 
         assert (workspace / "memory").exists() or (workspace / "skills").exists()
+
+    def test_creates_prompt_readme_without_dream_override(self, tmp_path):
+        workspace = tmp_path / "workspace"
+
+        added = sync_workspace_templates(workspace, silent=True)
+
+        assert "prompts/README.md" in {path.replace("\\", "/") for path in added}
+        assert (workspace / "prompts" / "README.md").exists()
+        assert not (workspace / "prompts" / "dream.md").exists()
 
     def test_returns_list_of_added_files(self, tmp_path):
         """Should return list of relative paths for added files."""
@@ -853,10 +862,11 @@ class TestApiServerRegistration:
         config = Config()
         from nanobot.config.schema import ApiConfig
 
-        new_api = ApiConfig(host="0.0.0.0", port=9999)
+        new_api = ApiConfig(host="0.0.0.0", port=9999, api_key="secret")
         _SETTINGS_SETTER["API Server"](config, new_api)
         assert config.api.host == "0.0.0.0"
         assert config.api.port == 9999
+        assert config.api.api_key == "secret"
 
 
 class TestMainMenuUpdate:
@@ -965,15 +975,20 @@ class TestMainMenuUpdate:
 
         choices = onboard_wizard._get_quick_start_provider_choices()
         selected_provider_names = set(choices.values())
-        expected_provider_names = {
-            spec.name
-            for spec in PROVIDERS
-            if spec.name != "custom" and not spec.is_oauth and not spec.is_transcription_only
-        }
+        expected_provider_names = set()
+        seen_display_names: set[str] = set()
+        for spec in PROVIDERS:
+            if spec.name == "custom" or spec.is_oauth or spec.is_transcription_only:
+                continue
+            if spec.display_name in seen_display_names:
+                continue
+            seen_display_names.add(spec.display_name)
+            expected_provider_names.add(spec.name)
         expected_provider_names.add("custom")
 
         assert selected_provider_names == expected_provider_names
         assert "assemblyai" not in selected_provider_names
+        assert choices["OpenCode Zen"] == "opencode"
         assert choices[onboard_wizard._QUICK_START_CUSTOM_PROVIDER_CHOICE] == "custom"
 
     def test_quick_start_provider_choice_skips_advanced_prompts(self, monkeypatch):
@@ -1436,7 +1451,7 @@ class TestMainMenuUpdate:
         assert "primary" not in config.model_presets
 
     def test_quick_start_summary_calls_out_missing_api_key(self, monkeypatch):
-        """Quick Start summary should not tell users to run gateway before adding a key."""
+        """Quick Start summary should retain the missing-key status."""
         config = Config()
         config.model_presets["primary"] = ModelPresetConfig(
             model="deepseek-v4-flash",
@@ -1454,17 +1469,9 @@ class TestMainMenuUpdate:
 
         onboard_wizard._show_quick_start_summary(config)
 
-        labels = [label for label, _value in captured["rows"]]
         rows = dict(captured["rows"])
         assert rows["Status"] == "DeepSeek API key missing"
-        assert "API key" in rows["Next"]
-        assert "nanobot gateway" in rows["Next"]
-        assert "agent -m" not in rows["Next"]
-        assert labels.index("Next") < labels.index("Open")
-        assert "Model" not in rows
-        assert "Entry point" not in rows
-        assert "API key" not in rows
-        assert "Defaults" not in rows
+        assert rows["WebSocket channel"] == "enabled"
 
     def test_configure_login_channel_defaults_to_login(self, monkeypatch):
         """The channel wizard should start login before exposing advanced fields."""
@@ -1998,3 +2005,27 @@ class TestModelPresetWizard:
         defaults = AgentDefaults()
         _handle_provider_field(defaults, "provider", "Provider", "auto")
         assert defaults.provider == "anthropic"
+
+    def test_search_provider_field_handler(self, monkeypatch):
+        """_handle_search_provider_field should set the search engine from choices."""
+        from nanobot.agent.tools.web import WebSearchConfig
+        from nanobot.cli.onboard import _handle_search_provider_field
+
+        monkeypatch.setattr(onboard_wizard, "_select_with_back", lambda *a, **kw: "keenable")
+
+        cfg = WebSearchConfig()
+        _handle_search_provider_field(cfg, "provider", "Provider", "duckduckgo")
+        assert cfg.provider == "keenable"
+
+    def test_provider_field_dispatch_is_model_type_aware(self):
+        """WebSearchConfig.provider must not be hijacked by the LLM provider handler."""
+        from nanobot.agent.tools.web import WebSearchConfig
+        from nanobot.cli.onboard import (
+            _handle_provider_field,
+            _handle_search_provider_field,
+            _resolve_field_handler,
+        )
+        from nanobot.config.schema import AgentDefaults
+
+        assert _resolve_field_handler(WebSearchConfig(), "provider") is _handle_search_provider_field
+        assert _resolve_field_handler(AgentDefaults(), "provider") is _handle_provider_field

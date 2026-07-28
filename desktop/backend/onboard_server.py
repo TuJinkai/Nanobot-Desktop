@@ -139,6 +139,24 @@ def build_and_save_config(*, provider, api_key, model, api_base=None) -> None:
 # ---------------------------------------------------------------------------
 
 
+def _load_logo_svg() -> str:
+    """算小智 mark svg，从 ../assets/nanobot_mark.svg 读取；读不到则回退 emoji。"""
+    import re
+    from pathlib import Path
+
+    try:
+        p = Path(__file__).resolve().parent.parent / "assets" / "nanobot_mark.svg"
+        svg = p.read_text(encoding="utf-8")
+        # 去掉固定 width/height，让 CSS（.logo svg {width:1em}）按字号缩放
+        svg = re.sub(r'\s*width="[^"]*"\s*height="[^"]*"', "", svg, count=1)
+        return svg.strip()
+    except Exception:
+        return "🤖"
+
+
+_LOGO_SVG = _load_logo_svg()
+
+
 _PAGE_CSS = """
   :root { --bg:#0f1115; --card:#171a21; --border:#262b36; --text:#e6e8eb;
           --muted:#9aa3ad; --accent:#6B9BFA; --accent-2:#4f7be0; --ok:#6AAB73; --err:#e06c6c; }
@@ -148,6 +166,7 @@ _PAGE_CSS = """
          background:radial-gradient(1200px 600px at 50% -10%,#1c2230,var(--bg)); color:var(--text); padding:24px; }
   .card { width:100%; max-width:480px; background:var(--card); border:1px solid var(--border);
           border-radius:16px; padding:36px 32px; box-shadow:0 20px 60px rgba(0,0,0,.45); }
+  .logo svg { width:1em; height:1em; display:block; }
 """
 
 
@@ -165,7 +184,7 @@ def _loader_html() -> str:
   @keyframes bounce {{ 0%,80%,100%{{ transform:scale(.6); opacity:.4; }} 40%{{ transform:scale(1); opacity:1; }} }}
 </style></head>
 <body><div class="card center">
-  <div class="logo">🤖</div>
+  <div class="logo">{_LOGO_SVG}</div>
   <div class="title" id="t">正在启动 算小智nanobot…</div>
   <div class="sub" id="s">首次启动需要几秒钟，请稍候</div>
   <div class="dots"><span class="dot"></span><span class="dot"></span><span class="dot"></span></div>
@@ -213,7 +232,7 @@ def _onboarding_html() -> str:
   @keyframes spin {{ to {{ transform:rotate(360deg); }} }}
 </style></head>
 <body><form class="card" id="form" autocomplete="off">
-  <div class="logo">🤖</div>
+  <div class="logo">{_LOGO_SVG}</div>
   <h1>欢迎使用 算小智nanobot</h1>
   <div class="sub">填写下方信息即可开始，整个过程不到一分钟。</div>
   <label for="provider">AI 服务商</label>

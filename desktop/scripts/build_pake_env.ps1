@@ -79,7 +79,7 @@ $pakeCmd = "$env:APPDATA\npm\pake.cmd"
 # inline, returns cleanly, and $LASTEXITCODE carries the exit code. (Not
 # `cmd /c "pake.cmd" …` — that trips cmd's quote rules and errors out.)
 Push-Location $output
-& $pakeCmd http://127.0.0.1:24691 --name nanobot --icon $icon --width 1100 --height 720 --inject $inject
+& $pakeCmd http://127.0.0.1:24691 --name nanobot --identifier com.nanobot.desktop --icon $icon --width 1100 --height 720 --inject $inject
 $pakeExit = $LASTEXITCODE
 Pop-Location
 
